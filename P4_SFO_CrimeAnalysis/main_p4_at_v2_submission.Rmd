@@ -1,0 +1,1731 @@
+---
+title: "San-Francisco Crime Analysis- Exploratory Analysis and Classification"
+author: "Vivek Yadav, PhD"
+date: "January 30, 2016"
+output: html_document
+
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.path='Figs/',
+                      echo=FALSE, warning=FALSE, message=FALSE)
+```
+
+```{r setup}
+
+# Loading libraries
+library(ggmap)
+library(ggplot2)
+library(dplyr)
+library(gridExtra)
+library(caret)
+library(e1071)
+library(dbscan)
+library(MASS)
+library(ggExtra)
+library(corrplot)
+library(LiblineaR)
+library(readr)
+
+```
+
+
+
+```{r functions}
+
+# functions to draw map of crime on SFO's map.
+
+map_crime <- function(crime_df, crime) {
+        filtered <- filter(crime_df, Category %in% crime)
+        plot <- ggmap(map, extent='device') + 
+                geom_point(data=filtered, 
+                           aes(x=X, y=Y, color=Category), alpha=0.1)
+        return(plot)
+}
+
+
+
+plot_crime_day <- function(crime_df, crime,wday) {
+        filtered <- filter(crime_df, Category %in% crime )
+        filtered <- summarise(group_by(filtered, Month,Years),
+                              count = n())
+        print(filtered)
+        plot <- ggplot(data = filtered, 
+                       aes(x = Month,y = count,color = Years)) +
+                geom_point()
+        
+        return(plot)
+}
+
+
+
+# functions to make variables from date info.
+
+make_vars_date <- function(crime_df) {
+        crime_df$Years = strftime(strptime(crime_df$Dates,
+                                           "%Y-%m-%d %H:%M:%S"),"%Y")
+        crime_df$Month = strftime(strptime(crime_df$Dates,
+                                           "%Y-%m-%d %H:%M:%S"),"%m")
+        crime_df$DayOfMonth = strftime(strptime(crime_df$Dates,
+                                                "%Y-%m-%d %H:%M:%S"),"%d")
+        crime_df$Hour = strftime(strptime(crime_df$Dates,
+                                          "%Y-%m-%d %H:%M:%S"),"%H")
+        crime_df$YearsMo = paste( crime_df$Years, crime_df$Month , 
+                                  sep = "-" )
+
+        
+
+        crime_df$DayOfWeek = factor(crime_df$DayOfWeek,
+                                    levels=c("Monday","Tuesday",
+                                             "Wednesday","Thursday",
+                                             "Friday","Saturday","Sunday"),
+                                    ordered=TRUE)
+        
+        
+        crime_df$weekday = "Weekday"
+        crime_df$weekday[crime_df$DayOfWeek== "Saturday" | 
+                                 crime_df$DayOfWeek== "Sunday" | 
+                                 crime_df$DayOfWeek== "Friday" ] = "Weekend"
+        
+        
+        addr_spl = strsplit(as.character(crime_df$Address),"/")
+        crime_df$AddressType = "Non-Intersection"
+        ind_l = vector()
+        ind_inxn = sapply(1:dim(crime_df)[1], 
+                          function(x) length(addr_spl[[x]]) == 2)
+        crime_df$AddressType[ ind_inxn ]="Intersection"
+
+        
+        
+        return(crime_df)
+}
+
+
+
+
+# functions to make contour maps
+
+map_contours <- function(data_trunc, alp) {
+        p1 = ggmap(map, extent='device') + 
+        geom_point(data=data_trunc, aes(x=X, y=Y), alpha= alp) + 
+        stat_density2d(aes(x = X, y = Y,
+                           fill = ..level.., alpha = ..level..),
+                size = 0.1, data = data_trunc, n=100,
+                geom = "polygon") +
+        theme(legend.position="none")
+        return(p1)
+}
+
+plot_marginals <- function(data_trunc) {
+        p2 = ggplot(data=data_trunc, aes(x=X, y=Y), alpha=0.1)+
+        geom_point()
+        p2 = ggMarginal(p2 + theme_gray(), type = "histogram",
+           fill = "steelblue", col = "darkblue")
+        return(p2)
+
+}
+
+
+
+
+
+
+```
+
+## Synopsis
+
+Here I analyzed the crime incidents in the city of San Francisco, and built a linear classifier to predict the probability of a crime belonging to certain category. I downloaded the data set from Kaggle's San Francisco crime classification competition (https://www.kaggle.com/c/sf-crime). I first loaded the data into R. The data set has information on the location of the crime and the time at which the crime occured starting from 2003. The data set had more than 800,000 rows and 9 columns. I did  exploratory analysis and made several variables to quantify various aspects of the crime incident. For example, from time information, I got information about data, hour of the day, month, year, etc. After exploratory analysis, I identified that the day of week, hour of the day, month, year and location were the main factors that affected crime rates. I therefore used these to predict the probability of a crime belonging to given category. I used R's Liblinear package to implement a L2-regularized logistic regression model to predict probability of each crime. To validate my model, I split into a 50% training set and 50% validation set. I then fitted the model on training data and improved based on its performance on the validation set. My final model had day of week, hour of the day, month, year, location and interaction between location and year. I then trained this model on full data. I then uploaded this on Kaggle and my best submission got a score of 401/1173. This is a work in progress, and I will make more refinements to the model in future. 
+
+
+
+```{r loading_data}
+# Loading data
+setwd("~/Desktop/DataSc_Udacity/P4/P4_v3/udacity_p4")
+data_train <- read.csv("train.csv")
+data_test <- read.csv("test.csv")
+
+head(data_train)
+
+
+```
+
+
+## Univariate Plot
+
+
+
+
+### Crime distribution
+I downloaded San Francisco crime data set from Kaggle. https://www.kaggle.com/c/sf-crime. After loading the data sets, I checked for distribution of crime across San Francisco. I first plotted the map of San Francisco with crime in red. Plot of map of 100000 randomly sampled crime location shows that the incidences of crime are higher in the eastern San Francisco area. 
+
+
+```{r echo = FALSE}
+# Overall distribution
+
+set.seed(20)
+map <- get_map("San Francisco", zoom = 12, color = "bw")
+ggmap(map, extent='device') + 
+     geom_point(data=sample_n(data_train,100000), aes(x=X, y=Y),
+                alpha = 1/10,color = "red")+
+     scale_colour_brewer(type="qual")
+
+```
+
+
+Distribution of locations of crime plotted for a subsample of 100000 points shows that most of the crime is concentrated in the north-eastern region of the map. However, more detailed contour maps show that these crimes are concentrated in 2 specific areas. 
+
+```{r}
+
+set.seed(22)
+p2 = plot_marginals(sample_n(data_train,10000))
+p2
+
+set.seed(20)
+p2 = map_contours(sample_n(data_train,10000),.1)
+p2
+```
+
+
+#### Location/police districts. 
+
+I plotted crime vs police district. Figure below shows a greater incidence of crime in Southern and Mission districts of San Francisco. 
+
+```{r echo = FALSE, warning = FALSE}
+# Overall distribution by police district
+
+data_plot = data_train %>%
+        group_by(PdDistrict) %>%
+        summarise(count = n()) %>%
+        transform(PdDistrict = reorder(PdDistrict,-count ))
+ggplot(data_plot) +
+        geom_bar(aes(x=PdDistrict, y=count, 
+                     color = PdDistrict, fill = PdDistrict),
+                 stat="identity")+
+        theme(legend.position="None")+
+        coord_flip()
+```
+
+
+#### Types of crime. 
+I next draw a bar plot to show number of crimes in each category. Bar plots indicate that the top crime categroy is Larceny/Theft. Further, top 20 crime types account for 97% of the crimes. 
+
+
+```{r  }
+
+# Types of crimes.
+data_plot = data_train %>%
+        group_by(Category) %>%
+        summarise(count = n()) %>%
+        transform(Category = reorder(Category,-count))
+
+ggplot(data_plot) + 
+  geom_bar(aes(x=Category, y=count, 
+               color = Category, fill = Category),
+           stat="identity")+
+        coord_flip()+
+    theme(legend.position="None")
+
+data_plot = data_plot[with(data_plot,order(-count)),]
+Top_crimes = data_plot
+
+print("Top 10 crimes")
+head(Top_crimes,20)
+df = data.frame()
+sum = 0
+for (i in 1:dim(Top_crimes)[1]){
+        sum = sum + Top_crimes[i,2] 
+        Top_crimes$CumCr[i] = sum/sum(Top_crimes$count)
+}
+
+per_20 = Top_crimes$CumCr[20]
+print(paste("Percentage of crimes in top 20 categories = " ,
+            as.character(per_20)))
+
+```
+
+
+### Extracting time information from date tag, and plotting crimes as functions of time. 
+
+In addition to crime category, time of the incident was also proivided in the data set. I used strptime function to convert time string to a datetime object and then used strftime to obtain more time-variables for the crime, for example,  hour, month, year, day of week and day of month, etc.
+
+
+```{r  }
+# Making additional variables.
+data_train = make_vars_date(data_train)
+data_test = make_vars_date(data_test)
+head(data_train)
+```
+
+
+#### Day of week. 
+
+I plotted crime as function of the Day of the week. Plots indicate that the crimes peak on Wednesday and Fridays, and sunday seems to have lower crime. 
+
+
+```{r }
+# Crime vs Day of week
+data_plot = data_train %>%
+        group_by(DayOfWeek,Years,Month) %>%
+        summarise(count = n()) 
+ggplot(data = data_plot,aes(x=DayOfWeek, y=count)) + 
+  geom_boxplot() +
+  ylab("Weekly crime count in each month since 2003")
+```
+
+
+
+#### Years
+
+I next plotted yearly trend of crime. I plotted total crime over all the years. It appears that there is a big dip in 2015. This because the data set has data only until May of 2015. Other than that, from 2003 to 2010 there was overall decrease in crime. However, since 2010, the number of crimes has increased.
+
+```{r }
+# Crime vs Years
+
+data_plot = data_train %>%
+        group_by(Years,Month) %>%
+        summarise(count = n()) 
+ggplot(data = data_plot,aes(x=Years, y=count)) + 
+  geom_boxplot() +
+  ylab("Crime count in each month of a year")
+```
+
+### By Year-month combo
+
+To check if there is complete data for 2015, I created a year-month variable and plotted it. As it can be seen from the graph below, the data is available only until May of 2015. A lower number in May indicates that this count is not complete. Therefore, may of 2015 will not be included in further analysis. 
+
+```{r }
+# Crime vs Year-Month Combo
+
+data_plot = data_train %>%
+        subset(Years>=2014) %>%
+        group_by(YearsMo,DayOfMonth) %>%
+        summarise(count = n()) 
+ggplot(data = data_plot,aes(x=YearsMo, y=count/30)) +
+  geom_boxplot()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+        ggtitle('Average daily crime count')
+```
+
+### By Day of the month
+
+I next plotted crime by the day of the month. First thing to note is that on 31st, the numbers of crimes is much lower than on other days. This is because in a year, there are very few days whose date is 31, 7 vs 12 (or 11) for other dates. In addition, number of crimes on 1st are higher than any other date. This may be because of 1 being default for the date in cases where exact date is not available. Excluding 1 and 31, there is cyclicity in the number of crimes vs date. In particular, there is higher incidence of crime between 4th and 8th of each month and 18 to 22 of each month. I will investigate this further in bivariate and multivariate plots section.
+
+```{r  }
+# Crime vs Day of Month
+data_plot = data_train %>%
+        subset(YearsMo!="2015-05") %>%
+        group_by(DayOfMonth) %>%
+        summarise(count = n()) 
+ggplot(data = data_plot,aes(x=as.numeric(DayOfMonth), y=count)) + 
+        geom_point()+
+        geom_line() 
+```
+
+### By hour of the day
+
+I next investigated crime by the hour of the day. Figure below shows a clear dip in crime from midnight to 5 am. The number of crimes then increase steadily until 10 am, and remain at high levels until midnight. 
+
+
+```{r  }
+# Crime vs hour of the day
+
+data_plot = data_train %>%
+        group_by(Hour,Years,Month,YearsMo) %>%
+        summarise(count = n()) 
+ggplot(data = data_plot,aes(x=Hour, y=count)) + 
+        geom_boxplot()
+
+```
+
+
+### Crimes by Month 
+
+Crime indicences vs month indicates a drop in crime rates in december and peak in crime in october and may. I didnt expect to see such a trend. I will investigate these trends more in bivariate section. 
+
+```{r }
+# Crime vs Month
+
+data_plot = data_train %>%
+        group_by(Month,Years) %>%
+        summarise(count = n()) 
+
+
+ggplot(data = data_plot,aes(x=Month, y=count,color = Month)) +
+        geom_boxplot() +
+        ylab("Crime count")
+
+```
+
+
+
+
+### What is the structure of your dataset?
+
+There are a 878049 rows of data in 17 columns. These columns correspond to, 
+
+1. Date: Date on which crime occured
+2. Category: Category of the crime, Category has 36 levels corresponding to the type of crime. 
+3. Descript: Descript corresponds to description of the incident.
+4. DayOfWeek: "Monday" to "Sunday" factor variable indicating day of the week. 
+5. PdDistrict: Police district.
+6. Resolution: Result of crime.
+7. Address: Address where crime occured
+8. X: Longitude of location of crime
+9. Y: Latitude of location of crime
+10. Years: Year in which crime occured
+11. Month: Month in which crime occured 1-January, 2-February, . . . , 12- December.
+12. DayOfMonth: 1 to 31 indicating date
+13. Hour: Hour of the day
+14. YearsMo: Years-month combination to investigate time-trend
+15. HourZn: Coarser descritication of hours in a day.
+16. weekday: Factor variable indicating if a day falls on weekend or on weekday,
+17. AddressType: Some addresses were entered as intersections and others as full addresses so I made this variable from address. 
+
+```{r echo = FALSE, warning = FALSE}
+dim_data = dim(data_train)
+print(paste("Number of rows in data : ", as.character(dim_data[1])))
+print(paste("Number of columns in data : ", as.character(dim_data[2])))
+head(data_train)
+
+```
+
+
+### What is/are the main feature(s) of interest in your dataset?
+
+The goal of this analysis is to predict the probability of a given category based on location and the time of the crime. Therefore, most important feature of the data set is Category. Other important features are the location of the crime and time at which the crime occured. Based on these, I will develop a model to predict the probability of the category given location and time of the incident. 
+
+
+
+```{r echo = FALSE, warning = FALSE}
+
+dim_data = dim(data_test)
+print(paste("Number of rows in test data : ", as.character(dim_data[1])))
+print(paste("Number of columns in test data : ", as.character(dim_data[2])))
+
+head(data_test)
+
+
+
+```
+
+
+
+
+
+### What other features in the dataset do you think will help support your investigation into your feature(s) of interest?
+Other important features are the variables that I extracted from the time of the crime. Some specific patterns to note are, 
+
+1. Crime is low and drops between midnight and 6 am. 
+2. Crime is low during December and highest in October. 
+3. Most crimes were of Larceny/Theft. 
+4. Southern and Mission districts had the highest crime incidents. 
+
+### Did you create any new variables from existing variables in the dataset?
+I created 8 additional variables, 
+
+1. Years: Year in which crime occured
+2. Month: Month in which crime occured 1-January, 2-February, . . . , 12- December.
+3. DayOfMonth: 1 to 31 indicating date
+4. Hour: Hour of the day
+5. YearsMo: Years-month combination to investigate time-trend
+6. HourZn: Coarser descritication of hours in a day.
+7. weekday: Factor variable indicating if a day falls on weekend or on weekday,
+8. AddressType: Some addresses were entered as intersections and others as full addresses so I made this variable from address. 
+
+
+### Of the features you investigated, were there any unusual distributions? Did you perform any operations on the data to tidy, adjust, or change the form of the data? If so, why did you do this?
+
+I extracted several features from time of the crime data. I got several additional variables to include effects of time and seasonal trends in crime. I also included variables for address type. 
+
+## Bivariate section
+
+In this section, I performed bivariate analysis where I plotted 2 or more variables against 1. I specifically fraction of each crime category as a function of different variables. 
+
+#### Types of crime vs Day of the week 
+
+Here I plot category of the crime vs day of the week. First I plotted total count. 
+
+```{r echo = FALSE}
+# Types of crime vs Day of the week 
+top_10 = Top_crimes[1:10,1]
+
+data_plot = data_train %>%
+        group_by(DayOfWeek, Category) %>%
+        summarise(count = n()) %>%
+        mutate(norm_count = (count-mean(count))/sd(count), 
+               prob_count = count/sum(count)) %>%
+        arrange(-count)
+
+
+ggplot(data = subset(data_plot, Category %in% top_10),
+       aes(x=DayOfWeek, y=count,color = Category)) +
+  geom_point() 
+  
+```
+
+
+As I intend to use these results to predict probability of a crime category, I plotted fraction of category vs day of crime. As Figure below shows that crime trends are different on different days. Saturday and Sundays seem to have higher larceny rates. 
+
+
+```{r echo = FALSE}
+
+top_10 = Top_crimes[1:10,1]
+
+data_plot = data_train %>%
+        sample_n(100000) %>%
+        arrange(DayOfWeek)
+
+
+ggplot(subset(data_plot, Category %in% top_10), 
+       aes(DayOfWeek, fill = Category))  +
+   geom_bar(position = "fill",width = .5 )
+   
+   
+
+
+```
+
+
+Previous plots indicates a higher crime rate on weekends. So I divided days into 2 zones, crimes during 4 weekdays (Mon-Thu) and on 3 days of weekends (Friday-Sunday). I computed average crime count by dividing total crime by the number of days in the weekday variable (4 for weekdays, and 3 for weekends). I then calculated percentage difference in average number of crimes, a positive value indicates higher crime on weekdays, and a negative value indicates lower crime on weekdays. As evident, there is a strong affect of weekday (weekend or during week) variable on crime rates. I was surprised to see that average DUI incidents are higher during weekdays, I had expected it to be higher during weekends. 
+
+```{r echo = FALSE}
+
+data_plot = data_train %>%
+        group_by(weekday, Category) %>%
+        summarise(count = n()) %>%
+        arrange(order=-count)
+
+
+
+
+data_weekday = data_plot[data_plot$weekday == "Weekday",]
+data_weekday = arrange(data_weekday,order = Category)
+data_weekend = data_plot[data_plot$weekday == "Weekend",]
+data_weekend = arrange(data_weekend,order = Category)
+
+df_combined = data.frame()
+i = 1
+for (names in data_weekend$Category) {
+        if (names %in% data_weekday$Category){
+                df_combined[i,1] = names
+
+                cat_vec = data_weekday$Category
+                vec_count = data_weekday$count
+                df_combined[i,2] = vec_count[names==cat_vec]
+                cat_vec = data_weekend$Category
+                vec_count = data_weekend$count
+                df_combined[i,3] = vec_count[names==cat_vec]
+                i=i+1
+                
+        }
+        
+}
+
+names(df_combined) = c("Category","Weekday","Weekend")
+vec_weekend = df_combined$Weekend/3
+vec_weekday = df_combined$Weekday/4
+diff_vec = vec_weekday - vec_weekend
+sum_vec = vec_weekday + vec_weekend
+
+df_combined$PerWeekday = diff_vec/sum_vec*100
+df_combined
+
+ggplot(data = df_combined, aes(x = Category, y = PerWeekday,
+                               size = log10(Weekday+Weekend))) + 
+        geom_point()+
+        geom_hline(aes(yintercept=0)) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+```
+
+
+#### Types of crime vs Year
+
+I next plotted crime variation across Years starting from 2003. In this part, I did not include the year 2015 because full data for 2015 was not available. Plots show a clear rise in Larceny/Theft and non-criminal incidences. In addition the plots show a sharp decline in vehicle theft in 2006. To obtain a better understanding of the crime rates, I normalized the crime count by subtracting the mean for each year and dividing by standard deviation. This allowed for a fairer comparison. 
+
+
+```{r echo = FALSE}
+# Types of crime vs Year
+
+top_10 = Top_crimes[1:10,1]
+data_plot = data_train %>%
+        subset(Years<=2014) %>%
+        group_by(Years, Category) %>%
+        summarise(count = n()) %>%
+        mutate(norm_count = (count - mean(count))/sd(count)) 
+
+ggplot(data = subset(data_plot, Category %in% top_10),
+       aes(x=as.numeric(Years), y=count,color = Category)) + 
+        geom_point()+
+        geom_line()+
+        xlim(2003,2014) 
+        
+ggplot(data = subset(data_plot, Category %in% top_10),
+       aes(x=as.numeric(Years), y=norm_count,color = Category)) + 
+        geom_point()+
+        geom_line()+
+        xlim(2003,2014) 
+                
+
+top_10 = Top_crimes[1:10,1]
+
+data_plot = data_train %>%
+        sample_n(100000) %>%
+        arrange(Years)
+
+
+ggplot(subset(data_plot, Category %in% top_10), 
+       aes(Years, fill = Category))  +
+   geom_bar(position = "fill",width = .5 )
+```
+
+Plots above show rise in Larceny and non-criminal crimes since 2010. Further, vehicle thefts and drug/narcotics related offence are on decline. These plots show that the distribution of crimes is different for different years. Therefore for predicting the current Category of crime, I will use data from 2012 onwards alone. I wanted to test if there is an overall year-dependent pattern in number of crime. I therefore normalized the number of crime in each year by subtracting the mean and dividing by the standard deviation. The crime data shows no year-dependent trend that is consistent across different crime categories. 
+
+
+```{r echo = FALSE}
+data_plot = data_train %>%
+        subset(Years<2015) %>%
+        group_by(Years, Category) %>%
+        summarise(count = n()) %>%
+        group_by(Category) %>%
+        mutate(norm_count = (count-mean(count))/sd(count)) 
+
+ggplot(data = subset(data_plot, Category %in% top_10),
+       aes(x=as.numeric(Years), y=norm_count,color = Category)) + 
+        geom_point()+
+        geom_line()+
+        xlim(2003,2014) 
+```
+   
+
+
+#### Types of crime vs Month
+
+I next plotted crime variation across different months to check if there are any seasonal patterns in crime rates. First plot indicates that there may be a time-trend in number of crime vs month. For assault, Larceny, other offenses and non-criminal offenses, the number of crimes show a strong correlation. I therefore, normalized the number of crimes in each month by subtracting the mean and dividing by standard deviation. After doing this, a clear month-dependent trend emerged. 
+
+
+```{r echo = FALSE}
+# Types of crime vs Month
+
+top_10 = Top_crimes[1:10,1]
+
+data_plot = data_train %>%
+        group_by(Category,Month) %>%
+        summarise(count = n()) %>%
+        mutate(norm_count = (count-mean(count))/sd(count)) 
+
+ggplot(data = subset(data_plot, Category %in% top_10),
+       aes(x=as.numeric(Month), y=count,color = Category)) + 
+        geom_line()+
+        geom_point()
+
+
+```
+
+After normalizing, its clear that there is a strong month-dependent trend in crime incidents. These plots show a high correlation in monthly crime incidents across different categories. 
+
+```{r echo = FALSE}
+
+
+
+
+ggplot(data = subset(data_plot, Category %in% top_10),
+       aes(x=as.numeric(Month), y=norm_count,color = Category)) + 
+        geom_line()+
+        geom_point()
+
+data_plot = data_train %>%
+        group_by(Category,Month) %>%
+        summarise(count = n()) %>%
+        group_by(Category) %>%
+        mutate(norm_count = (count-mean(count))/sd(count)) 
+
+
+ggplot(data = subset(data_plot, Category %in% top_10),
+       aes(x=as.numeric(Month), y=norm_count,color = Category)) + 
+        geom_line()+
+        geom_point()
+
+data_split = split(data_plot,data_plot$Category)
+
+data_spl_crime =  matrix(ncol=10, nrow=12)
+for (i in 1:10){
+        name_crime = top_10[i]
+        data_spl_crime[,i] =  data_split[[i]]$norm_count
+
+}
+data_spl_crime = data.frame(data_spl_crime)
+names(data_spl_crime) = top_10
+
+
+corrplot(cor(data_spl_crime),method = "number")
+
+```
+
+
+Plots above show that there is a strong correalion between crime categories across months. Therefore, it may be possible to drop the month from prediction of crime category. Plot below shows that the relative ratios of crime remains relatively unchanges. Therefore, there is weak effect of month on crime category, and month can be dropped from final prediction model. 
+
+```{r echo = FALSE}
+top_10 = Top_crimes[1:10,1]
+data_plot = data_train %>%
+        arrange(Month)
+ggplot(subset(data_plot, Category %in% top_10),
+       aes(Month, fill = Category))  +
+   geom_bar(position = "fill",width = .5 )
+        
+
+
+
+```
+
+
+#### Types of crime vs Day of the month
+
+I next plotted crime variation across hours of the day. I did not include the dates with value 31 and 1. I removed 31 because the number of months with 31 days is much less than the number of days with 30 days. I removed 1 from exploratory analysis because in most cases 1 may have been used as the default date. Plots below indicate a strong day-dependent trend in the crime number. This trend is clear when I normalized the crime count by subtracting the mean and dividing by the standard deviation. Days 10-16 and 25-30 have lower crime incidents than days between 5 and 10, and 15 to 20. Plot of fraction of crime vs day of the month also shows that the fraction of crime varies across the day of the month.
+
+
+```{r echo = FALSE}
+# Types of crime vs Day of the month
+
+top_10 = Top_crimes[1:10,1]
+
+data_plot = data_train %>%
+        group_by(Category,DayOfMonth) %>%
+        summarise(count = n()) %>%
+        group_by(Category) %>%
+        mutate(norm_count = (count-mean(count))/sd(count)) 
+
+
+
+ggplot(data = subset(data_plot, Category %in% top_10),
+       aes(x=as.numeric(DayOfMonth), y=count,color = Category)) + 
+        geom_line()+
+        geom_point()+
+        xlim(2,30) 
+
+
+ggplot(data = subset(data_plot, Category %in% top_10),
+       aes(x=as.numeric(DayOfMonth), y=norm_count,color = Category)) + 
+        geom_line()+
+        geom_point() +
+        xlim(2,30)+
+        ylim(-1.51,1.51) + 
+        theme(legend.position="bottom")
+
+```
+
+
+To check the reason for this pattern, I plotted test and training data from 2014. Plots below show that the data was split in such a way that the data for every other week was assigned to train or test data sets. Therefore, I will not use day of the month for building the model. 
+
+```{r echo = FALSE}
+
+data_plot = data_train %>%
+        subset(Years==2014) %>%
+        group_by(Month,DayOfMonth) %>%
+        summarise(count = n()) 
+
+data_plot$type = "Train"
+
+data_plot2 = data_test %>%
+        subset(Years==2014) %>%
+        group_by(Month,DayOfMonth) %>%
+        summarise(count = n()) 
+
+data_plot2$type = "Test"
+
+data_plot_c = rbind(data_plot,data_plot2)
+ggplot(data = subset(data_plot_c),
+       aes(x=as.numeric(DayOfMonth), y=count,color = type)) + 
+        geom_point() +
+        facet_wrap(~Month)
+
+
+```
+
+
+
+
+#### Types of crime vs Hour
+
+I next plotted crime variation across different hours of the day. Plots show a greater criminal activity between 10 am and midnight, and a sharp drop around 5 pm. Similar trend was observed across all crime catergories after normalizing by substracting the mean and dividing by standard deviation. As hour affects crime incidents, it will be included in the model to predict probability of the crime category.
+
+```{r echo = FALSE}
+# Types of crime vs Hour
+
+top_10 = Top_crimes[1:10,1]
+
+data_plot = data_train %>%
+        group_by(Category,Hour) %>%
+        summarise(count = n()) %>%
+        mutate(norm_count = (count-mean(count))/sd(count)) 
+
+ggplot(data = subset(data_plot, Category %in% top_10),
+       aes(x=as.numeric(Hour), y=count,color = Category)) + 
+        geom_line()+
+        geom_point()
+
+ggplot(data = subset(data_plot, Category %in% top_10),
+       aes(x=as.numeric(Hour), y=norm_count,color = Category)) + 
+        geom_line()+
+        geom_point()
+
+
+top_10 = Top_crimes[1:10,1]
+data_plot = data_train %>%
+        arrange(Hour)
+ggplot(subset(data_plot, Category %in% top_10), aes(Hour, fill = Category))  +
+   geom_bar(position = "fill",width = .5 )
+        
+```
+
+
+
+#### Types of crime vs Addresstype
+
+
+```{r echo = FALSE}
+# Types of crime vs Addresstype
+top_10 = Top_crimes[1:10,1]
+
+data_plot = data_train %>%
+        group_by(Category,AddressType) %>%
+        summarise(count = n()) %>%
+        group_by(Category) %>%
+        mutate(norm_count = (count-mean(count))/sd(count)) 
+data_plot$AddressType_C= 0
+data_plot$AddressType_C[data_plot$AddressType== "Non-Intersection"]= 1
+
+ggplot(data = subset(data_plot, Category %in% top_10),
+       aes(x=AddressType_C, y=count,color = Category)) + 
+        geom_point() +
+        geom_line() +
+        coord_cartesian(xlim=c(-.2,1.2))+
+        scale_x_discrete(breaks=c(0,1),
+                      labels=c("Intersection","Non-Intersection"))
+
+top_10 = Top_crimes[1:10,1]
+data_plot = data_train %>%
+        arrange(AddressType)
+ggplot(subset(data_plot, Category %in% top_10), 
+       aes(AddressType, fill = Category))  +
+   geom_bar(position = "fill",width = .5 )
+
+```
+
+
+#### Crime category by location
+
+I next plot contours of crime distributions across San Francisco in year 2014 only. I chose 2014 because crime trends were affected by the years. Further, including only 2014 data signifianctly reduced the number of data points, which helped in faster plotting. Plots below show that the type of crime heavily depends on the location on the map. For example, larceny was more concentrated in the north east area of the map, where as vehicle theft is more evenly spread across  the eastern region of the map. 
+
+```{r echo = FALSE, cache = TRUE, warning = FALSE}
+# Crime category by location
+top_10 = Top_crimes[1:20,1]
+plots_all = list()
+i = 1
+for (crime in top_10) {
+       plots_all[[crime]] = map_contours(subset(data_train,
+                                            Years==2014 & Category == crime),
+                                         alp=.01) + 
+               ggtitle(crime)
+        i = 1+1
+} 
+
+grid.arrange(plots_all[[1]],plots_all[[2]],plots_all[[3]],
+        plots_all[[4]],plots_all[[5]],plots_all[[6]],
+        plots_all[[7]],plots_all[[8]],plots_all[[9]],
+        plots_all[[10]],ncol=4)
+        
+
+
+```
+
+
+#### Crime category by Police District
+
+I next plot contours of crime distributions across San Francisco in year 2014 only classified by police district. Plots below confirm that the type of crime heavily depends on the location on the map. These crimes however indicate the regions of police districts, and the crime rates may be different in each one. 
+
+```{r echo = FALSE, cache = TRUE, warning = FALSE}
+# Crime category by location
+top_10 = unique(data_train$PdDistrict)
+plots_all = list()
+i = 1
+for (District in top_10) {
+       plots_all[[District]] = map_contours(subset(data_train,
+                                        Years==2014 & PdDistrict == District),
+                                        alp=.01) + 
+               ggtitle(District)
+        i = 1+1
+} 
+
+grid.arrange(plots_all[[1]],plots_all[[2]],plots_all[[3]],
+        plots_all[[4]],plots_all[[5]],plots_all[[6]],
+        plots_all[[7]],plots_all[[8]],plots_all[[9]],
+        plots_all[[10]],ncol=4)
+        
+
+
+```
+
+
+# Bivariate Analysis
+
+### Talk about some of the relationships you observed in this part of the investigation. How did the feature(s) of interest vary with other features in the dataset?
+
+From the analysis above, the main factors that affect crime rates are, 
+- Month: Crime numbers showed a seasonal pattern where crime was less during February, and higher from march to may, and in october.
+- Hour of day: Crime incidents varied with the hour of the day. The numbers dropped gradually from midnight to 5 am, and rose after that until midnight
+- Day of the month: There was minor variation in crime numbers with the day of month. Crime rates were higher from 5th to 10th and from 18th to 22. - Day of the week: 
+- Geographic location: Of all the variables, the crime rate was most affected by the geographic location of the crime. Crimes were higher in eastern region of them map. Further investigation revealed that these crimes were localized around certain areas. Some crimes, like vehicle theft were spread more evenly over larger area than others.  
+
+### What was the strongest relationship you found?
+
+Strongest relations in bi-variate section were, 
+
+1- Hour of the day,
+2- Month,
+3- Day of week, 
+4- Location
+5- Years
+
+```{r echo = FALSE}
+top_10 = Top_crimes[1:10,1]
+
+data_plot = data_train %>%
+        group_by(Category,Month) %>%
+        summarise(count = n()) %>%
+        mutate(norm_count = (count-mean(count))/sd(count)) 
+
+ggplot(data = subset(data_plot, Category %in% top_10),
+       aes(x=as.numeric(Month), y=norm_count,color = Category)) + 
+        geom_line()+
+        geom_point()
+
+```
+
+
+Another significant factor that influences crime incidences is the hour of the day. The plot below shows a steady decline from midnight to 5 am and rise of the 
+
+```{r echo = FALSE}
+data_plot = data_train %>%
+        group_by(Category,Hour) %>%
+        summarise(count = n()) %>%
+        mutate(norm_count = (count-mean(count))/sd(count)) 
+
+ggplot(data = subset(data_plot, Category %in% top_10),
+       aes(x=as.numeric(Hour), y=norm_count,color = Category)) + 
+        geom_line()+
+        geom_point()
+
+```
+
+
+
+### Multivariate plots
+
+From the analysis above, the main factors that affect crime rates are, 
+
+- Month: Crime numbers showed a seasonal pattern where crime was less during February, and higher from march to may, and in october.
+- Hour of day: Crime incidents varied with the hour of the day. The numbers dropped gradually from midnight to 5 am, and rose after that until midnight
+- Day of the month: There was minor variation in crime numbers with the day of month. Crime rates were higher from 5th to 10th and from 18th to 22. - Day of the week: 
+- Geographic location: Of all the variables, the crime rate was most affected by the geographic location of the crime. Crimes were higher in eastern region of them map. Further investigation revealed that these crimes were localized around certain areas. Some crimes, like vehicle theft were spread more evenly over larger area than others.  
+
+In this section, I investigate variations in crime rate based on different combinations of the main factors identified from previous exploratory analysis. 
+
+#### Crime rate vs Month and Hour of day,
+
+Crime vs hour faceted by month indicates that the hourly patterns are maintened for all the months, and the patterns do not appear to be different in different months. 
+
+```{r echo = FALSE}
+# Crime rate vs Month and Hour of day,
+top_10 = Top_crimes[1:10,1]
+
+data_plot = data_train %>%
+        group_by(Category,Hour,Month) %>%
+        summarise(count = n()) %>%
+        mutate(norm_count = (count-mean(count))/sd(count)) 
+
+ggplot(data = subset(data_plot, Category %in% top_10),
+       aes(x=as.numeric(Hour), y=count,color = Category)) +
+        geom_line()+
+        geom_point() + 
+        facet_wrap(~Month)
+
+```
+
+#### Crime rate vs Month and DayOfWeek,
+
+Crime vs Month faceted by the day of week indicates that the patterns of crime in each month is different for different days of the week. Monday, tuesday and wednesday have a bimodal pattern where crimes rise around march and in october. For thursdays and fridays, the crimes peak in october. However, this peak is not observed for saturday and sunday. Further, all days have high Larceny/theft incidences and about even distribution of other crime types. However, on sunday and saturday, assult, non-criminal and other offeneses are concentrated around 1000, and other crimes are lower. Except larceny, all other crimes are lower on weekends. 
+
+```{r echo = FALSE}
+# Crime rate vs Month and DayOfWeek,
+top_10 = Top_crimes[1:10,1]
+
+data_plot = data_train %>%
+        group_by(Category,DayOfWeek,Month) %>%
+        summarise(count = n()) %>%
+        mutate(norm_count = (count-mean(count))/sd(count)) 
+
+ggplot(data = subset(data_plot, Category %in% top_10),
+       aes(x=as.numeric(Month), y=count,color = Category)) +
+        geom_line()+
+        geom_point() + 
+        facet_wrap(~DayOfWeek)
+
+
+ggplot(data = subset(data_plot, Category %in% top_10),
+       aes(x=as.numeric(Month), y=norm_count,color = Category)) +
+        geom_line()+
+        geom_point() + 
+        facet_wrap(~DayOfWeek)
+
+```
+
+#### Crime rate vs Month and day of the month.
+
+Crime vs day of the month faceted by month shows a strong seasonal pattern in crime incidents. The crime incidences peak about every 2 weeks. Infact, there are 26 times in a year that the crimes peaks. 
+
+```{r echo = FALSE, warning=FALSE}
+## Crime rate vs Month and day of the month.
+months_name = list("01" = "Jan",
+                   "02" = "Feb",
+                   "03" = "Mar",
+                   "04" = "Apr",
+                   "05" = "May",
+                   "06" = "Jun",
+                   "07" = "Jul",
+                   "08" = "Aug",
+                   "09" = "Sep",
+                   "10" = "Oct",
+                   "11" = "Nov",
+                   "12" = "Dec")
+label_fn <- function(variable,value){
+        return(months_name[value])
+}
+
+top_10 = Top_crimes[1:10,1]
+
+data_plot = data_train %>%
+        group_by(Category,DayOfMonth,Month) %>%
+        summarise(count = n()) %>%
+        mutate(norm_count = (count-mean(count))/sd(count)) 
+
+ggplot(data = subset(data_plot, Category %in% top_10),
+       aes(x=as.numeric(DayOfMonth), y=count,color = Category)) +
+        geom_line()+
+        geom_point() + 
+        facet_wrap(~Month,ncol=4, labeller=label_fn)
+
+```
+
+
+To further investigate crime rate's seasonal pattern. I normalized the crime by subtracting mean and dividng by standard deviation in each category. The normalized z-score shows strong seasonality in crime trends. Its surprising that this trend occurs in more than 800000 data points collected over past 12 years.  
+
+
+```{r echo = FALSE, warning=FALSE}
+
+top_10 = Top_crimes[1:10,1]
+
+data_plot = data_train %>%
+        group_by(Category,DayOfMonth,Month) %>%
+        summarise(count = n()) %>%
+        mutate(norm_count = (count-mean(count))/sd(count)) 
+
+ggplot(data = subset(data_plot, Category %in% top_10),
+       aes(x=as.numeric(DayOfMonth), y=norm_count,color = Category)) +
+        geom_line()+
+        geom_point() + 
+        facet_wrap(~Month,ncol=4, labeller=label_fn) 
+        
+
+
+
+
+
+```
+
+To investigate the seasonal pattern, I investigated crime variation in 2014 year. These patterns further confirm the previous finding that the observed 2 week periodicity is due to how test and train data were separated. Therefore, day of month will not be used for modeling. 
+
+
+
+```{r echo = FALSE,  warning=FALSE}
+year_num = 2014
+data_plot = data_train %>%
+        subset(Years == year_num) %>%
+        group_by(Category,DayOfMonth,Month) %>%
+        summarise(count = n()) %>%
+        mutate(norm_count = (count-mean(count))/sd(count)) 
+        
+ggplot(data = subset(data_plot, Category %in% top_10) ,
+       aes(x=as.numeric(DayOfMonth), y=count, color = Category)) +
+        geom_line()+
+        geom_point() + 
+        ggtitle(as.character(year_num))+
+        facet_wrap(~Month,ncol=4, labeller=label_fn) 
+
+
+
+        
+        
+data_plot = data_train %>%
+        subset(Years==2014) %>%
+        group_by(Month,DayOfMonth) %>%
+        summarise(count = n()) 
+
+data_plot$type = "Train"
+
+data_plot2 = data_test %>%
+        subset(Years==2014) %>%
+        group_by(Month,DayOfMonth) %>%
+        summarise(count = n()) 
+
+data_plot2$type = "Test"
+
+data_plot_c = rbind(data_plot,data_plot2)
+ggplot(data = subset(data_plot_c),
+       aes(x=as.numeric(DayOfMonth), y=count,color = type)) + 
+        geom_point() +
+        facet_wrap(~Month,ncol=4, labeller=label_fn)
+
+        
+
+
+```
+
+
+
+
+#### Crime rate vs day of week and Hour of day
+
+Crime vs hour of the day faceted by the day of week reveals a similar trend across all days of the week. The crime numbers drop around 5 pm and rise sharply and remain at high levels until midnight. 
+
+```{r echo = FALSE}
+# Crime rate vs day of week and Hour of day
+top_10 = Top_crimes[1:10,1]
+
+data_plot = data_train %>%
+        group_by(Category,DayOfWeek,Hour) %>%
+        summarise(count = n()) %>%
+        mutate(norm_count = (count-mean(count))/sd(count)) 
+
+ggplot(data = subset(data_plot, Category %in% top_10),
+       aes(x=as.numeric(Hour), y=count,color = Category)) +
+        geom_line()+
+        geom_point() + 
+        facet_wrap(~DayOfWeek,ncol=4)
+        
+        
+ggplot(data = subset(data_plot, Category %in% top_10),
+       aes(x=as.numeric(Hour), y=norm_count,color = Category)) +
+        geom_line()+
+        geom_point() + 
+        facet_wrap(~DayOfWeek,ncol=4)
+
+```
+
+
+
+
+#### Crime  vs Month and Location
+
+Crime across San Francisco plotted for each month reveals that the incidents of crime varies with georgaphic location, and these incidents are different for different month. For a better comparision and brevity, I checked variations for one crime category only. 
+
+```{r echo = FALSE, cache = TRUE}
+# Crime  vs Month and Location
+months_name = c("Jan","Feb","Mar","Apr","May","Jun",
+                "Jul","Aug","Sep","Oct","Nov","Dec")
+top_10 = Top_crimes[1:1,1]
+for (crime in top_10) { 
+        plots_all = list()
+         
+        for (i_month in 1:12) {
+                i = 1
+                
+                data_ss = data_train %>%
+                        subset(Years==2014 & Category == crime) %>%
+                        subset(as.numeric(Month)== i_month)
+
+                plots_all[[i_month]] = map_contours(data_ss,
+                        alp=.01) + 
+                        ggtitle(paste(crime," in ", months_name[i_month]))
+                i = 1+1
+        }  
+
+        grid.arrange(plots_all[[1]],plots_all[[2]],plots_all[[3]],
+                plots_all[[4]],plots_all[[5]],plots_all[[6]],
+                plots_all[[7]],plots_all[[8]],plots_all[[9]],
+                plots_all[[10]],
+                plots_all[[11]],plots_all[[12]],ncol=3)
+}        
+
+```
+
+
+
+#### Crime  vs Day of week and location
+
+Crime across San Francisco plotted for each month reveals that the incidents of crime varies with georgaphic location, and these incidents are different for different month. For a better comparision and brevity, I checked variations for larsony only. 
+
+```{r echo = FALSE, cache = TRUE}
+# Crime  vs Day of week
+wkday_name = c("Monday","Tuesday","Wednesday","Thursday",
+               "Friday","Saturday","Sunday")
+wkday_name2 = c("Mo","Tu","We","Th","Fr","Sa","Su")
+top_10 = Top_crimes[1:1,1]
+for (crime in top_10) { 
+        plots_all = list()
+         
+        for (i_wk in 1:7) {
+                i = 1
+                
+                data_ss = data_train %>%
+                        subset(Years==2014 & Category %in% crime) %>%
+                        subset(DayOfWeek== wkday_name[i_wk]) 
+                
+                plots_all[[i_wk]] = map_contours(data_ss,
+                        alp=.05) + 
+                        ggtitle(paste(crime," in ", wkday_name2[i_wk]))
+                i = 1+1
+        }  
+
+        grid.arrange(plots_all[[1]],plots_all[[2]],plots_all[[3]],
+                plots_all[[4]],plots_all[[5]],plots_all[[6]],
+                plots_all[[7]],ncol=3)
+}        
+
+```
+
+
+#### Crime  vs Hour and location
+
+Crime across San Francisco plotted for each month reveals that the incidents of crime varies with georgaphic location, and these incidents are different for different month. For a better comparision and brevity, I checked variations for larceny only. 
+
+```{r echo = FALSE, cache = TRUE}
+# Crime  vs Hour
+top_10 = Top_crimes[1:1,1]
+for (crime in top_10) { 
+        plots_all = list()
+         
+        for (i_wk in 1:24) {
+                i = 1
+                data_ss = data_train %>%
+                        subset(Years==2014 & Category == crime) %>%
+                        subset(as.numeric(Hour)== i_wk-1)
+                plots_all[[i_wk]] = map_contours(data_ss,
+                        alp=.1) + 
+                        ggtitle(paste("Hour: ", i_wk))
+                i = 1+1
+        }  
+
+        grid.arrange(plots_all[[1]],plots_all[[2]],plots_all[[3]],
+                plots_all[[4]],plots_all[[5]],plots_all[[6]],
+                plots_all[[7]],plots_all[[8]],plots_all[[9]],
+                plots_all[[10]],plots_all[[11]],plots_all[[12]],
+                plots_all[[13]],plots_all[[14]],plots_all[[15]],
+                plots_all[[16]],plots_all[[17]],plots_all[[18]],
+                plots_all[[19]],plots_all[[20]],plots_all[[21]],
+                plots_all[[22]],plots_all[[23]],plots_all[[24]],
+                ncol=6)
+}        
+```
+
+
+
+#### Final model building
+
+I wanted to predict the probability of a crime belonging to a given category, given the time and location of the crime. 
+
+1- I divided the data into a 50% training and 50% validation sets. I then fit several models with hour, day of week, month, year, police district and all combined as independent variables. 
+2- I fit the data for each model on the training data set, and tested its accuracy on a validation set. 
+3- I used LibLinear package of R to perform multi-class classification. The final model had the following varaibles, 
+
+        - Hour of the day
+        - Day of the week
+        - Month
+        - Police District
+
+
+
+```{r}
+MultiLogLoss <- function(act, pred)
+    {
+      eps = 1e-15;
+      nr <- nrow(pred)
+      pred = matrix(sapply( pred, function(x) max(eps,x)), nrow = nr)      
+      pred = matrix(sapply( pred, function(x) min(1-eps,x)), nrow = nr)
+      ll = sum(act*log(pred) + (1-act)*log(1-pred))
+      ll = ll * -1/(nrow(act))      
+      return(ll);
+    }
+
+```
+
+
+
+```{r echo = FALSE, warning = FALSE}
+# discretization for model. 
+make_vars_model <- function(crime_df) {
+
+        crime_df$HourZn = "H8"
+        crime_df$HourZn[crime_df$Hour>="00" & crime_df$Hour<"03"]="H1"
+        crime_df$HourZn[crime_df$Hour>="03" & crime_df$Hour<"06"]="H2"
+        crime_df$HourZn[crime_df$Hour>="06" & crime_df$Hour<"09"]="H3"
+        crime_df$HourZn[crime_df$Hour>="09" & crime_df$Hour<"12"]="H4"
+        crime_df$HourZn[crime_df$Hour>="12" & crime_df$Hour<"15"]="H5"
+        crime_df$HourZn[crime_df$Hour>="15" & crime_df$Hour<"18"]="H6"
+        crime_df$HourZn[crime_df$Hour>="18" & crime_df$Hour<"21"]="H7"
+        crime_df$HourZn = factor(crime_df$HourZn)
+
+     
+
+        return(crime_df)
+
+}
+
+
+
+
+make_training_factors = function(df) {
+        
+        
+        df$Years=paste("Yr",df$Years,sep = ".")
+        df$Years = factor(df$Years)
+        y <- as.data.frame(model.matrix(~df$Years - 1))
+        names(y) <- levels(df$Years)
+        
+        
+        
+        df$Hour=paste("Hr",df$Hour,sep = ".")
+        df$Hour = factor(df$Hour)
+        h <- as.data.frame(model.matrix(~df$Hour - 1))
+        names(h) <- levels(df$Hour)
+
+       hz <- as.data.frame(model.matrix(~df$HourZn - 1))
+         names(hz) <- levels(df$HourZn)
+        
+        dow <- as.data.frame(model.matrix(~df$DayOfWeek - 1))
+        names(dow) <- levels(df$DayOfWeek)
+        
+        df$Month=paste("Mon",df$Month,sep = ".")
+        df$Month = factor(df$Month)
+        m <- as.data.frame(model.matrix(~df$Month-1))
+        names(m) <- levels(df$Month)
+        head(m)
+
+        district <- as.data.frame(model.matrix(~df$PdDistrict - 1))
+        names(district) <- levels(df$PdDistrict)
+
+        df$pY=paste(df$PdDistrict,df$Years,sep = ".")
+        df$pY = factor(df$pY)
+        pY <- as.data.frame(model.matrix(~df$pY - 1))
+        names(pY) <- levels(df$pY)
+       
+        df$pdM=paste(df$PdDistrict,df$Month,sep = ".")
+        df$pdM = factor(df$pdM)
+        pdM <- as.data.frame(model.matrix(~df$pdM - 1))
+        names(pdM) <- levels(df$pdM)
+        
+        #training set
+        train <- data.frame( y,dow, h, district, m)
+        train <- data.frame( h)
+        return(train)
+
+        
+}
+
+
+make_training_factors_i = function(df,i_model) {
+        df$Years=paste("Yr",df$Years,sep = ".")
+        df$Years = factor(df$Years)
+        y <- as.data.frame(model.matrix(~df$Years - 1))
+        names(y) <- levels(df$Years)
+        
+        df$Hour=paste("Hr",df$Hour,sep = ".")
+        df$Hour = factor(df$Hour)
+        h <- as.data.frame(model.matrix(~df$Hour - 1))
+        names(h) <- levels(df$Hour)
+
+        hz <- as.data.frame(model.matrix(~df$HourZn - 1))
+        names(hz) <- levels(df$HourZn)
+        
+        dow <- as.data.frame(model.matrix(~df$DayOfWeek - 1))
+        names(dow) <- levels(df$DayOfWeek)
+        
+        df$Month=paste("Mon",df$Month,sep = ".")
+        df$Month = factor(df$Month)
+        m <- as.data.frame(model.matrix(~df$Month-1))
+        names(m) <- levels(df$Month)
+        
+        district <- as.data.frame(model.matrix(~df$PdDistrict - 1))
+        names(district) <- levels(df$PdDistrict)
+
+        train <- data.frame( y,dow, h, district, m)
+        
+        switch(i_model,
+                h = {train <- data.frame(h)},
+                hz = {train <- data.frame(hz)},
+                m = {train <- data.frame(m)},
+                y = {train <- data.frame(y)},
+                dow ={train <- data.frame(dow)},
+                Pd = {train <- data.frame(district)},
+                all = {train <- data.frame( y,dow, h, district, m)})
+  
+        return(train)
+        
+        
+}
+
+
+
+make_map_grid = function(df){
+        bbox_ll_lat = 37.7
+        bbox_ur_lat = 37.9
+
+        bbox_ll_lon = -123
+        bbox_ur_lon = -122  
+
+        n_spc = 30
+
+        diff_lon = (bbox_ur_lon - bbox_ll_lon)/n_spc
+        cuts_lon = (0:n_spc)*diff_lon+bbox_ll_lon
+
+        diff_lat = (bbox_ur_lat - bbox_ll_lat)/n_spc
+        cuts_lat = (0:n_spc)*diff_lat+bbox_ll_lat
+
+
+        df$X_c<-cut(df$X, cuts_lon)
+        df$Y_c<-cut(df$Y, cuts_lat)
+        return(df)
+        
+}
+
+
+
+```
+
+
+
+```{r final_model}
+
+## TRAINING WITH DATA FROM 2012 ONLY. 
+
+models = c("h","hz","m","Pd","y","dow","all")
+mll_models = list()
+for (ind_model in models){
+        
+        set.seed(88)
+        smp_size <- floor(0.5 * nrow(data_train)) # splitting data
+        train_ind <- sample(seq_len(nrow(data_train)), size = smp_size)
+        train <- data_train[train_ind, ]
+        test <- data_train[-train_ind, ]
+        
+        target <- train[,"Category"]
+        train = make_vars_model(train)
+        train = make_training_factors_i(train,ind_model)
+        
+        
+        gc()
+        
+        #Build a linear model 
+        model <- LiblineaR(train, target, type = 7, verbose = FALSE)
+        
+        test = make_vars_model(test)
+        target_test = test[,"Category"] 
+        test = make_training_factors_i(test,ind_model)
+        
+        pred = predict(model,test,proba = TRUE)
+        pred_prob = data.frame(pred$probabilities[, levels(target)])
+        
+        act_pred <- as.data.frame(model.matrix(~target_test- 1))
+        names(act_pred) <- levels(target)
+        
+        pred_prob_m = data.matrix(pred_prob)
+        act_pred_m = data.matrix(act_pred)
+        mll_models[ind_model] = MultiLogLoss(act_pred_m,pred_prob_m) 
+        vec_out = paste("Model: ", 
+                        ind_model, 
+                        ", Multi-logloss: ",
+                        as.character(mll_models[ind_model] ) )
+        print(vec_out)
+        
+}
+
+```
+
+
+
+------
+
+# Final Plots and Summary
+
+### Plot One
+```{r echo=FALSE, Plot_One}
+
+# Types of crimes.
+data_plot = data_train %>%
+        group_by(Category) %>%
+        summarise(count = n()) %>%
+        transform(Category = reorder(Category,-count))
+
+ggplot(data_plot) + 
+  geom_bar(aes(x=Category, y=count, 
+               color = Category, fill = Category),
+           stat="identity")+
+        coord_flip()+
+    theme(legend.position="None")+
+        ggtitle("Number of crimes in individual category")+
+        xlab("Number of crimes")+
+        ylab("Category of crime")
+
+
+# Crime category vs year
+
+
+data_plot = data_train %>%
+        subset(Category %in% top_10) %>%
+        group_by(Years,Category,Month) %>%
+        summarise(count = n()) 
+
+data_plot$Category = factor(data_plot$Category,levels = top_10)
+
+ggplot(data = data_plot,aes(x=Years, y=count,fill = Category)) + 
+        geom_boxplot() + 
+        facet_wrap(~Category,ncol = 5)+
+        theme(legend.position="None",
+              axis.text.x = element_text(angle = 90, hjust = 1)) +
+        xlab("Year")+
+        ylab("Number of crime incidents")+
+        ggtitle("Variations in crime by year")+
+        xlab("Number of crimes")+
+        ylab("Year")
+
+```
+
+### Description One
+
+Figures above show distribution of crime and change in type of crime since 2003. From the first plot, Larceny/theft is the most common type of crime. Further, there appears to be a skewness in the type of crimes. For example, there were 174900 incidents of LARCENY/THEFT where as only 6 of TREA since 2003. Crimes belonged to the top 10 categories 83% of the time. And top 20 categories had 97% of the crimes. Therefore, a classifier that classifies crime in top 20 categories may be sufficient for most crime categories. For now, I used a model where I was predicting probability for all 39 classes, but in future I will use fewer predictors to see if I can increase accuracy of the model for them. 
+
+The second plot shows median total crimes per month from 2003 to 2015. Plot indicates that larceny/theft rates are on rise. Most interesting trend is reduction in number of vehicle thefts from 2006 to 2007. 
+
+
+### Plot Two
+```{r echo=FALSE, Plot_Two}
+
+# Crime vs DayOfWeek
+
+months_name = c("Jan","Feb","Mar","Apr","May","Jun",
+                "Jul","Aug","Sep","Oct","Nov","Dec")
+
+
+data_plot = data_train %>%
+        group_by(DayOfWeek,Years,Month,YearsMo) %>%
+        summarise(count = n()) 
+p1 = ggplot(data = data_plot,aes(x=DayOfWeek, y=count,fill = DayOfWeek)) + 
+        geom_boxplot() + 
+        theme(legend.position="None") +
+        xlab("Day of week")+
+        ylab("Number of crime incidents")+
+        coord_cartesian(ylim = c(300,1200))
+        
+# Crime vs month
+data_plot = data_train %>%
+        group_by(Month,Years,Month,YearsMo) %>%
+        summarise(count = n()) 
+p2 = ggplot(data = data_plot,aes(x=as.numeric(Month), y=count,fill = Month)) + 
+        geom_boxplot() + 
+        xlab("Month")+
+        ylab("Number of crime incidents")+
+        theme(legend.position="None") +
+        scale_x_continuous(breaks = 1:12, labels=months_name)
+        
+
+# Crime vs hour of the day
+data_plot = data_train %>%
+        group_by(Hour,Years,Month,YearsMo) %>%
+        summarise(count = n()) 
+p3 = ggplot(data = data_plot,aes(x=Hour, y=count,fill = Hour)) + 
+        geom_boxplot() + 
+        xlab("Hour of day")+
+        ylab("Number of crime incidents")+
+        theme(legend.position="None")
+        
+
+grid.arrange(p1,p2,p3,ncol = 1,top="Important factors affecting crime rates")
+
+
+
+```
+
+### Description Two
+
+Plots above show trends in crime for 3 main date factors, 
+
+- Day of week: Crime rates change during the week. Crime incidents are higher on Friday, and lowest on Sundays
+- Month: Crime rate is highest during october, and lowest in december. Crime seems to follow a bimodal pattern with peaks in May and October and valleys in December and August. 
+- Hour: Crime vs Hour of day shows a gruadual reduction in crime from midnight to 5 am, after which it rises from 5 am to 10 am, and remains at sustained high level until midnight. 
+
+### Plot Three
+```{r echo=FALSE, Plot_Three}
+
+months_name = c("Jan","Feb","Mar","Apr","May","Jun",
+                "Jul","Aug","Sep","Oct","Nov","Dec")
+
+# Types of crime vs Month
+
+top_10 = Top_crimes[1:10,1]
+
+data_plot = data_train %>%
+        group_by(Category,Month) %>%
+        summarise(count = n()) %>%
+        mutate(norm_count = (count-mean(count))/sd(count)) 
+p1 = ggplot(data = subset(data_plot, Category %in% top_10),
+            aes(x=as.numeric(Month), y=count,color = Category)) + 
+        geom_line()+
+        geom_point()+
+        scale_x_discrete(breaks = 1:12, labels=c("Jan","Feb","Mar",
+                                                 "Apr","May","Jun",
+                                                 "Jul","Aug","Sep",
+                                                 "Oct","Nov","Dec")) +
+        xlab("Months")+
+        ylab("Crime count") + 
+        theme(legend.position="None")
+
+p2 = ggplot(data = subset(data_plot, Category %in% top_10),
+            aes(x=as.numeric(Month), y=norm_count,color = Category)) + 
+        geom_line()+
+        geom_point()+
+        scale_x_discrete(breaks = 1:12, labels=c("Jan","Feb","Mar",
+                                                 "Apr","May","Jun",
+                                                 "Jul","Aug","Sep",
+                                                 "Oct","Nov","Dec")) +
+        xlab("Months")+
+        ylab("Normalized crime count")+ 
+        theme(legend.position="bottom")
+
+grid.arrange(p1,p2,ncol = 1,top = "Normalizing by month reveals common patterns in data")
+
+
+
+```
+
+
+Therefore, normalizing can reveal patterns that are otherwise hidden. 
+
+
+```{r echo=FALSE}
+
+
+# Crime rate vs day of week and Hour of day
+top_10 = Top_crimes[1:10,1]
+
+data_plot = data_train %>%
+        group_by(Category,Hour) %>%
+        summarise(count = n()) %>%
+        mutate(norm_count = (count-mean(count))/sd(count)) 
+p1 = ggplot(data = subset(data_plot, Category %in% top_10),
+            aes(x=as.numeric(Hour), y=norm_count,color = Category)) +
+        geom_line()+
+        geom_point() + 
+        xlab("Hour of Day") +
+        ylab("Nomalized crime count") + 
+        theme(legend.position="None")
+
+
+
+
+
+data_plot = data_train %>%
+        group_by(Category,Month) %>%
+        summarise(count = n()) %>%
+        mutate(norm_count = (count-mean(count))/sd(count)) 
+p2 = ggplot(data = subset(data_plot, Category %in% top_10),
+            aes(x=as.numeric(Month), y=norm_count,color = Category)) +
+        geom_line()+
+        geom_point() + 
+        xlab("Month") +
+        ylab("Nomalized crime rate") +
+        scale_x_discrete(breaks = 1:12, labels=c("Jan","Feb","Mar",
+                                                 "Apr","May","Jun",
+                                                 "Jul","Aug","Sep",
+                                                 "Oct","Nov","Dec"))+ 
+        theme(legend.position="bottom")
+
+grid.arrange(p1,p2,ncol = 1, top = "Normalized crime rate")
+
+
+```
+
+### Description Three
+
+Plots above show that although the number of crimes is different, the relative change with hour or month covary. This is especially clear in the first plot where I plotted number of crime in each category and normalized crime count. The next plot highlights this pattern for both the hour of the day and month. Correlation between crime counts per month and hour also highlights the correlation between variations in crime over month or hour of the day. 
+
+
+```{r}
+data_plot = data_train %>%
+        group_by(Category,Month) %>%
+        summarise(count = n()) %>%
+        group_by(Category) %>%
+        mutate(norm_count = (count-mean(count))/sd(count)) 
+
+
+data_split = split(data_plot,data_plot$Category)
+
+data_spl_crime =  matrix(ncol=10, nrow=12)
+for (i in 1:10){
+        name_crime = top_10[i]
+        data_spl_crime[,i] =  data_split[[i]]$norm_count
+
+}
+data_spl_crime = data.frame(data_spl_crime)
+names(data_spl_crime) = top_10
+
+print("Correlation by Month")
+
+corrplot(cor(data_spl_crime),method = "number")
+
+
+data_plot = data_train %>%
+        group_by(Category,Hour) %>%
+        summarise(count = n()) %>%
+        group_by(Category) %>%
+        mutate(norm_count = (count-mean(count))/sd(count)) 
+
+
+data_split = split(data_plot,data_plot$Category)
+
+
+print("Correlation by Hour of day")
+
+data_spl_crime =  matrix(ncol=10, nrow=24)
+for (i in 1:10){
+        name_crime = top_10[i]
+        data_spl_crime[,i] =  data_split[[i]]$norm_count
+
+}
+data_spl_crime = data.frame(data_spl_crime)
+names(data_spl_crime) = top_10
+
+
+corrplot(cor(data_spl_crime),method = "number")
+
+```
+
+------
+
+# Reflection
+
+For this project, I downloaded San Francisco's crime data from Kaggle and performed exploratory analysis and built a linear regression model to predict the category of a given crime. During my exploratory analysis, I found that crime incidents although may appear random, when normalized by subtracting mean and dividing by standard deviation, follow similar trends across different crime categories. This trend was observed across crime categories for month, days of week and hours of day. 
+To build the model, I used year, hour, day of week, month and police district as independent variables. I did model fitting using the following steps, 
+
+1- I divided the data into a 50% training and 50% validation sets. I then fit several models with hour, day of week, month, year, police district and all combined as independent variables. 
+2- I fit the data for each model on the training data set, and tested its accuracy on a validation set. 
+3- I used LibLinear package of R to perform multi-class classification. The table below gives result of fitting. 
+
+        - Hour of the day, 3.59
+        - Day of the week, 3.63
+        - Month, 3.63
+        - Police District, 3.55
+        - Years, 3.60
+        - All, 3.5
+From above, its clear that these variables are important for classifying. Further, year and location had the most affect on crime class, therefore I included an interaction term also. My final model had day of week, hour of the day, month, year, location and interaction between location and year. I then trained this model on full data. I got a log loss value of 2.56 which places my submission on 401 out of 1183. 
+
+This is a work in progress, and I will work on improving predictions as I learn more of machine learning. In the current model, I am not utilizing address or location information fully. One idea I want to test is to divide the crime into different groups where each group corresponds to a combination of hour, week day and month, and then obtain a 2-D kernel density estimate of each crime. From these density values, I can get the probability of a crime occuring at a given location given the crime category. I can use this to perform naive bayes calcuation to compute probability of a crime belonging to a category, given time and location of the crime. I also did not include interaction terms to account for the fact that the crime rates may be different across different combination of factors. For example, crime rate may be different during individual days of the week in different month. The simple model that I made does not account for these variations. 

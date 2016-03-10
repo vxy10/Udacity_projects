@@ -1,0 +1,949 @@
+Exploratory Data Analysis (EDA) of diamonds dataset by Vivek Yadav, PhD
+========================================================
+
+
+
+In this report I explore diamonds data set in ggplot2, and build a model to predict diamond price from characteristics of the diamond. 
+
+# Univariate Analysis
+
+## Structure of the data
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, packages}
+# loading required libraries
+library(ggplot2)
+library(gridExtra)
+library(psych)
+library(dplyr)
+library(scales)
+library(memisc)
+library(GGally)
+theme_set(theme_minimal(20))
+
+
+```
+
+After loading data from the ggplot data set, I used str command to investigate structure of the data set. From output below, diamonds set has 10 columns of data for 53940 diamonds. The variables are,
+
+1. Price: Price of the diamond in USD
+
+2. Carat: Weight of the diamond in carats ranging from 0.2 to 5.01
+
+3. Cut of the diamond, the levels are  (Fair(worst), Good, Very Good, Premium, Ideal(best))
+
+4. Color of the diamond, from J (worst) to D (best)
+
+5. Clarity of the diamond (I1 (worst), SI1, SI2, VS1, VS2, VVS1, VVS2, IF (best))
+
+6. x,y,z: length, width and depth of the diamond. 
+
+7. depth of the diamond, a measure of aspect ratio. 2*z/(x+y), 43 and 79.
+
+8. width of the diamond, width of the top of the diamond relative to widest point (43-95)
+
+
+## Main Variables
+```{r echo=FALSE, message=FALSE,Load_the_Data}
+# Load the Data
+data(diamonds)
+str(diamonds)
+
+```
+
+
+As we are interested in predicting the price of the diamond, the main variables investigated here are price, carat, cut and clarity. 
+
+#### Price
+
+Histogram of price for all the diamonds. Surprisingly, there is no diamond whose price lies between 1460 and 1530. There seems to be multiple peaks for prices. Especially, there is a peak around 1000, and another near 4000. These numbers may indicate budgets that individuals are most comforatable spending. There may be other factors that could infludence price of the diamond.
+
+```{r echo=FALSE,message=FALSE,warning=FALSE}
+# plotting price histogram
+p1 = ggplot(aes(x=price), data = diamonds) + 
+        geom_histogram(binwidth = 10) 
+
+
+p2 =  ggplot(aes(x=price), data = diamonds) + 
+        geom_histogram(binwidth = .015) +
+        scale_x_log10()
+
+grid.arrange(p1,p2, ncol = 2)
+```
+
+Fig 1. Histogram of Price and Log(price) for the diamonds. 
+
+#### Carat
+
+Histogram of carat for all the diamonds. The distributions seems very unusual. This is not surprising, given that most diamonds people buy are precut into standard sizes. For example, most diamonds are expected to come in some fixed sizes, like .5, 1, 1.5, 2 etc. 
+
+```{r echo = FALSE,message=FALSE, warning=FALSE}
+# plotting carat histogram
+p1 = ggplot(aes(x=carat), data = diamonds) + 
+        geom_histogram(binwidth = .01) + 
+        suppressWarnings(xlim(0,4))
+```
+
+Fig 2. Histogram of carat. 
+
+A new varaible  "carat.cut" is made to accomodate the fact that diamonds are cut in a way to have pre-decided prefered weights. Also, the distributions of cuts is skewed to right because customors may consider a diamonds as a 2 carat diamond only if its above 2 carat, and might reject a 1.98 carat diamond because it weights less than 2. Therefore, the manufacturuer may devise their strategy in such a way that the diamonds cuts are all above some predefined numbers. These values were chosen as, c(0,.29,0.39,.49,.69,.89,.99,1.19,1.49,1.69,1.99,6).
+
+```{r}
+# Creating new variable carat.cut
+carat_prefered = c(0,.29,0.39,.49,.69,.89,.99,1.19,1.49,1.69,1.99,6)
+diamonds$carat.cut = cut(diamonds$carat, breaks = carat_prefered)
+lvls_diamonds_caratcut =c("(0,0.29]","(0.29,0.39]","(0.39,0.49]","(0.49,0.69]", "(0.69,0.89]","(0.89,0.99]","(0.99,1.19]","(1.19,1.49]","(1.49,1.69]","(1.69,1.99]","(1.99,6]")
+carat.cut = factor(diamonds$carat.cut,levels = levels(diamonds$carat.cut),ordered=TRUE) 
+```
+
+After making the "carat.cut" variable, the histogram is plotted again with color indicating the region of the prefered carat cut. Another variable, DistPrefered is created to quantify deviation from the desired cut. This variable was computed as the minimum difference between the carat value and the largest prefered carat size smaller than the actual value. For example, for a carat of 2.5, the largest value of prefered size below 2.5 is 1.99, and the distance is calculated as 2.5-1.99 = 0.51.
+
+```{r echo = FALSE,message=FALSE, warning=FALSE}
+# Creating new variable carat.cut
+p1 = ggplot(aes(x=carat,fill = carat.cut), data = diamonds) + 
+        geom_histogram(binwidth = .01) +
+        suppressWarnings(xlim(0,3))
+
+# Creating new variable DistPrefered, distance between carat size and its prefered size.
+d_prefered_matrix = matrix(, nrow=length(diamonds$carat),ncol = 0)
+
+for (i in 1:length(carat_prefered))
+{
+        d_prefered_matrix = cbind(d_prefered_matrix, diamonds$carat -carat_prefered[i])
+}
+
+d_prefered_matrix[d_prefered_matrix<0]= 100
+d_prefered_matrix_min=apply(d_prefered_matrix, 1, function(x) min(x) ) 
+
+diamonds$DistPrefered = d_prefered_matrix_min
+
+p2 = ggplot(aes(x=DistPrefered,fill = carat.cut), data = diamonds) + 
+        geom_histogram(binwidth = .01) + 
+        suppressWarnings(xlim(0,quantile(diamonds$DistPrefered,probs=.99)))
+
+grid.arrange(p1,p2, ncol = 1)
+```
+
+Fig 3. Histogram of Carat and deviation from prefered size.
+
+#### Depth
+Histogram of depth for all the diamonds. The distributions seems well behaved. Depth variable seems to have unimodal symmetric distribution. 
+
+```{r echo=FALSE,message=FALSE,warning=FALSE}
+# plotting depth histogram
+ggplot(aes(x=depth), data = diamonds) + 
+        geom_histogram(binwidth = .5) 
+
+
+```
+
+Fig 4. Histogram of Depth
+
+
+#### TABLE
+Histogram of table for all the diamonds. The distributions seems very odd. Although not all values are integers, 53016 of 53940 are integer values. This variable may be a variable that is used to characterize the shape of the diamond, and may be related to the cut of the diamond. I therefore divided the data into smaller regions based on table size, and used cut function to create factors. I created 2 variables one with finer spacing and other coarse spacing. I created these 2 variables to later check if there are any trends in prices that may be predicted by the table.
+
+```{r echo = FALSE}
+# Checking if all values are integers
+table(floor(diamonds$table) == diamonds$table   )
+```
+
+```{r echo=FALSE,message=FALSE,warning=FALSE}
+# plotting table histogram histogram
+p1 = ggplot(aes(x=table), data = diamonds) + 
+        geom_histogram() 
+
+p2 = ggplot(aes(x=table), data = diamonds) + 
+        geom_histogram(binwidth = .1) 
+
+grid.arrange(p1,p2, ncol = 1)
+```
+
+Fig 5. Histogram of Table
+
+```{r message=FALSE,warning=FALSE}
+# Creating 2 variables for table/
+
+table_cut_limits = c(0,54.5,55.5 ,56.5,57.5,58.5,59.5,60.5,61.5,100)
+table_cut_limits2 = c(0,55.5 ,57.5,59.5,100)
+diamonds$table.cut = cut(diamonds$table, breaks = table_cut_limits)
+diamonds$table.cut2 = cut(diamonds$table, breaks = table_cut_limits2)
+
+diamonds$table.cut = factor(diamonds$table.cut,levels = levels(diamonds$table.cut),ordered=FALSE) 
+diamonds$table.cut2 = factor(diamonds$table.cut2,levels = levels(diamonds$table.cut2),ordered=FALSE) 
+
+```
+
+
+
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+# Creating count plots for cut, clarity and color
+
+p1 = ggplot(as.data.frame(table(diamonds$table.cut)), aes(x=Var1, y = Freq)) +
+        geom_bar(stat="identity")+
+        coord_flip() + labs(x = "Table cut 1")
+
+p2 = ggplot(as.data.frame(table(diamonds$table.cut2)), aes(x=Var1, y = Freq)) +
+        geom_bar(stat="identity")+
+        coord_flip() + labs(x = "Table cut 2")
+
+grid.arrange(p1,p2,ncol=1)
+
+
+
+
+```
+
+Fig 6. Counts for table.cut and table.cut2
+
+
+### X, Y and Z
+Histogram of histograms for x,y and z are below. Based on these histograms, the dimensions seem to be well behaved. There were some values that were 0s. This information is not used for further analysis because when one goes to purchase diamonds, they do not determine the quality (hence the value) of the diamond based on x,y and z dimensions. These may be used to compute volume, however, without knowng the exact shape, x,y and z only define a bounding box around the diamond. Further, any volume information is already available in carats. Because 1 carat is about 2 grams, and for fixed density of the diamond, the volume has a linear relation with the weight in carat. 
+
+```{r echo=FALSE,message=FALSE,warning=FALSE}
+# Pltting histogram of x,y and z
+
+p1 = ggplot(aes(x=x), data = diamonds) + 
+        geom_histogram() +
+        xlim(0,12) + 
+        ylim(0,11000)
+
+p2 = ggplot(aes(x=y), data = diamonds) + 
+        geom_histogram() +
+        xlim(0,12) + 
+        ylim(0,11000)
+
+
+p3 = ggplot(aes(x=z), data = diamonds) + 
+        geom_histogram() + 
+        ylim(0,11000)+
+        xlim(0,12)
+
+grid.arrange(p1,p2,p3, ncol = 3)
+
+```
+
+Fig 7. Histogram of X,Y and Z. 
+
+# Cut, clarity and color. 
+
+As these varaiables are factors, a histogram is not generated. However, bargraphs with total counts of diamonds for each color, clarity and cut are plotted. Further, as these variables are ordered factors, and its expected that clearer diamonds will fetch higher prices, the factors are ordered. To make the distinction that these are ordered factors, the counts are plotted as horizontal bars. Most of the diamonds are premium or better cuts. For color and clarity, the distribution is slightly more symmetric than for cut.
+
+```{r echo = FALSE,warning=FALSE}
+# making factors ordered.
+cut_lvls = c("Fair", "Good", "Very Good", "Premium", "Ideal")
+diamonds$cut = factor(diamonds$cut,levels = cut_lvls,ordered=TRUE) 
+
+col_lvls = c("J", "I", "H", "G", "F", "E", "D")
+diamonds$color = factor(diamonds$color,levels = col_lvls,ordered=TRUE) 
+
+clr_lvls = c("I1", "SI1", "SI2", "VS1", "VS2", "VVS1", "VVS2", "IF")
+diamonds$clarity = factor(diamonds$clarity,levels = clr_lvls,ordered=TRUE) 
+
+
+p1 = ggplot(as.data.frame(table(diamonds$cut)), aes(x=Var1, y = Freq)) +
+        geom_bar(stat="identity")+
+        coord_flip() + labs(x = "Cut")
+
+p2 = ggplot(as.data.frame(table(diamonds$color)), aes(x=Var1, y = Freq)) +
+        geom_bar(stat="identity")+
+        coord_flip() + labs(x = "color")
+p3 = ggplot(as.data.frame(table(diamonds$clarity)), aes(x=Var1, y = Freq)) +
+        geom_bar(stat="identity")+
+        coord_flip()+ labs(x = "clarity")
+
+grid.arrange(p1,p2,p3, ncol = 1)
+
+```
+
+Fig 8. Counts for cut, clarity and color
+
+
+
+# Univariate Analysis
+
+### What is the structure of your dataset?
+Diamonds set has 10 columns of data for 53940 diamonds. The variables are,
+
+1. Price: Price of the diamond in USD
+
+2. Carat: Weight of the diamond in carats ranging from 0.2 to 5.01
+
+3. Cut of the diamond, the levels are  (Fair(worst), Good, Very Good, Premium, Ideal(best))
+
+4. Color of the diamond, from J (worst) to D (best)
+
+5. Clarity of the diamond (I1 (worst), SI1, SI2, VS1, VS2, VVS1, VVS2, IF (best))
+
+6. x,y,z: length, width and depth of the diamond. 
+
+7. depth of the diamond, a measure of aspect ratio. 2*z/(x+y), 43 and 79.
+
+8. width of the diamond, width of the top of the diamond relative to widest point (43-95)
+
+```{r echo = FALSE, message = FALSE, warning = FALSE}
+# summary of modified dataset
+
+str(diamonds)
+summary(diamonds[c(1,2,3,4,5,6,7,11,12,13)])
+```
+
+
+
+### What is/are the main feature(s) of interest in your dataset?
+The purpose of this analysis is to predict price. Therefore, most important feature of interest is price. Other features that are of interest are carat, cut, clarity and color. 
+
+### What other features in the dataset do you think will help support your investigation into your feature(s) of interest?
+Carat, color, cut and clarity are most likely going to be the variables that will be used to predict the price of the diamond. Depth and table may be useful in quantifying shape of the diamonds.
+
+### Did you create any new variables from existing variables in the dataset?
+
+I created 4 new variables. 
+
+-  Carat.cut:  I saw that carats for the diamonds were clustered around some fixed numbers.This is not surprising because most diamonds are precut, and manufactures may produce diamonds of weight (carats) increasing in predefined increments. Another thing I noticed is that for all the diamonds, the distribution of carats were switched to the right of the prefered numbers. This is understandable because a customer who is looking to buy a 2 carat diamond is more likely to purchase a 2.1 carat diamond instead of 1.9. I therefore created 2 variables. 
+carat.cut and DistPrefered. Carat.cut is a ordered factor that indicated the prefered weight of the diamond. 
+- DistPrefered quantifies the difference between actual weight in carats and the prefered size of the diamond. 
+- table.cut and table.cut are finer and coarse factors that quantify the range of diamond's table value. 
+
+### Of the features you investigated, were there any unusual distributions? Did you perform any operations on the data to tidy, adjust, or change the form of the data? If so, why did you do this?
+
+Diamond's carat values showed very unusual trend, where there were a large number of diamonds for certain predefined values of carats. This is not surprising because most diamonds are precut, and manufactures may produce diamonds of weight (carats) increasing in predefined increments. Another thing I noticed is that for all the diamonds, the distribution of carats were switched to the right of the prefered numbers. This is understandable because a customer who is looking to buy a 2 carat diamond is more likely to purchase a 2.1 carat diamond instead of 1.9. I therefore created 2 variables, carat.cut a factor indicating the prefered size of the diamond, and Distprefered indicating error from the predefined value. This manipulation significantly removed the discontinuties in the histogram of carat. 
+
+Another thing I noticed is that the diamond's table values were all integers. Further, it may be possible that this value is a proxy for the shape of the diamond. Therefore, I created 2 variables, table.cut and table.cut2. These 2 factors represent discretization of the table range into a finer and coarser regions.
+
+Further, I ordered cut, clarity, color, and carat.cut. Because for these variables, a better indicator of diamond is expected to have higher price. 
+
+I also removed x,y and z from the diamonds data set because, these do not provide a direct measure of diamond's price. These may be used to compute volume, however, without knowng the exact shape, x,y and z only define a bounding box around the diamond. Further, any volume information is already available in carats. Because 1 carat is about 2 grams, and for fixed density of the diamond, the volume has a linear relation with the weight in carat. Therefore, I dont use x,y and z values in further analysis.
+
+# Bivariate Plots Section
+
+## Panels plot to observe overall patterns. 
+
+The strongest predictor of price seems to be carat. In all the 3 variables that are related to carat (carat, carat.cut and Distprefered), the correlation between price and carat is high. Higher carat gets higher price. 
+
+
+
+```{r echo=FALSE, Bivariate_Plots}
+
+set.seed(10)
+pairs.panels(sample_n(diamonds[,c(1,2,3,4,5,6,7,11,12,13)], 1000), pch=".")
+
+```
+
+Fig 9. Panel plots for correlation between variables
+
+
+#### Price vs Carat variables
+
+As carat increases, the price increases. The relation between price and carat seems to be nonlinear. This may be because it is more difficult to find a larger diamond with minimal to no faults. This pattern is expecially clear after applying log to the price. 
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+# plot of price vs carat. 
+
+p1 = ggplot(data = diamonds, aes(x=carat, y = price)) +
+        geom_point()+
+        geom_smooth()
+
+p2 = ggplot(data = diamonds, aes(x=carat, y = log(price))) +
+        geom_point()+
+        geom_smooth()
+
+grid.arrange(p1,p2,ncol =1 )
+
+```
+
+Fig 10. Price vs carat
+
+Two other variables that were created were carat.cut and DistPrefered. Plots below show distribution of price with carat and price variations with value above the prefered value. The second plot is colorcoded with carat.cut because diamonds with higher carat are expected to be pricier. 
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+# plot of price vs carat.cut and DistPrefered.
+p1 = ggplot(data = diamonds, aes(x=carat.cut, y = price)) +
+        geom_point()
+p2 = ggplot(data = diamonds, aes(x=DistPrefered, y = price,color = carat.cut)) +
+        geom_point()
+grid.arrange(p1,p2,ncol =1 )
+```
+
+Fig 11. Price vs carat.cut
+
+#### Price vs Cut
+I first checked the price vs cut patterns. It appears that the trends are bimodal. This may be affected by the prefered sizes of diamonds. I next plot log of price vs cut. We jitter the points toget a sense of distribution and plot box plots also. These plots indicate that cut may not be a strong predictor of diamond price. The red line is mean price. 
+
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+# plot of price vs cut
+p1 = ggplot(data = diamonds, aes(x=cut, y = log(price))) +
+        geom_point(alpha = 1/10,position="jitter")+
+        coord_cartesian(ylim = c(0,10) )
+
+p2 = ggplot(data = diamonds, aes(x=cut,log(price))) +
+        geom_boxplot()+ 
+        stat_summary(fun.y=mean, geom="line", aes(group=1),color = "Red")  + 
+        stat_summary(fun.y=mean, geom="point")+
+        coord_cartesian(ylim = c(0,10) )
+
+grid.arrange(p1,p2,ncol =1 )
+```
+
+Fig 12. Price vs cut
+
+Diamonds with ideal or premium cut seemed to have lower prices. This may be due to difference in the number of diamonds with better cuts. 
+
+
+
+
+#### Price vs Clarity
+We next plot log of price vs Clarity. We jitter the points toget a sense of distribution and plot box plots also. These plots indicate that price varies invesrly with clarity This is surprising because we expect poorer clarity diamonds to be more expensive. However, the skewness in the plots may be due to differences in number of diamonds in each group. We will further investigate this relation in multivariate plots section. The red line is mean price.
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+# plot of price vs clarity
+p1 = ggplot(data = diamonds, aes(x=clarity, y = log(price))) +
+        geom_point(alpha = 1/10,position="jitter")+
+        coord_cartesian(ylim = c(0,10) )
+
+p2 = ggplot(data = diamonds, aes(x=clarity,log(price))) +
+        geom_boxplot()+ 
+        stat_summary(fun.y=mean, geom="line", aes(group=1),color = "Red")  + 
+        stat_summary(fun.y=mean, geom="point")+
+        coord_cartesian(ylim = c(0,10) )
+
+grid.arrange(p1,p2,ncol =1 )
+```
+
+Fig 13. Price vs clarity
+
+#### Price vs Color
+We next plot log of price vs color. We jitter the points toget a sense of distribution and plot box plots also. These plots indicate that price varies proporionately with the quality of color. The red line is mean price.
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+# plot of price vs color
+p1 = ggplot(data = diamonds, aes(x=color, y = log(price))) +
+        geom_point(alpha = 1/10,position="jitter")+
+        coord_cartesian(ylim = c(0,10) )
+
+p2 = ggplot(data = diamonds, aes(x=color,log(price))) +
+        geom_boxplot()+ 
+        stat_summary(fun.y=mean, geom="line", aes(group=1),color = "Red")  + 
+        stat_summary(fun.y=mean, geom="point")+
+        coord_cartesian(ylim = c(0,10) )
+
+grid.arrange(p1,p2,ncol =1 )
+```
+
+Fig 14. Price vs color
+
+#### Price vs Depth
+We next plot log of price vs depth. We jitter the points toget a sense of distribution and plot box plots also. These plots indicate that price varies proporionately with the quality of color. Depth seems to have no effect on the price, so this variable will mostly not be included in model building. 
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+# plot of price vs depth
+ggplot(data = diamonds, aes(x=depth, y = log(price))) +
+        geom_point(alpha = 1/10)
+```
+
+Fig 15. Price vs depth
+
+#### Price vs Table
+We next plot log of price vs table. From plot below the trends are not clear. However, table is a shape factor, and is expected to be different for different diamonds. We therefore made 2 variables table.cut and table.cut2, to quantify shape.
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+# plot of price vs table
+ggplot(data = diamonds, aes(x=table, y = log(price))) +
+        geom_point(alpha = 1/100)
+```
+
+Fig 16. Price vs  Table
+
+We therefore plot table.cut and price. We jitter the points toget a sense of distribution and plot box plots also. These plots indicate that price varies proporionately with the quality of color. Depth seems to have no effect on the price, so this variable will mostly not be included in model building. 
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+# plot of price vs table
+p1 = ggplot(data = diamonds, aes(x=table.cut2, y = log(price),color = carat.cut)) +
+        geom_point(alpha = 1/100,position="jitter")+
+        coord_cartesian(ylim = c(0,10) )
+
+p2 = ggplot(data = diamonds, aes(x=table.cut2,log(price))) +
+        geom_boxplot()+ 
+        stat_summary(fun.y=mean, geom="line", aes(group=1),color = "Red")  + 
+        stat_summary(fun.y=mean, geom="point")+
+        coord_cartesian(ylim = c(0,10) )
+
+grid.arrange(p1,p2,ncol =1 )
+
+```
+
+Fig 17. Price vs  Table.cut
+
+
+We next compare a finer and coarse discretization of Table. It appear that the finer gradation may be better suited to predict price of the diamonds. 
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+# plot of price vs table
+p1 = ggplot(data = diamonds, aes(x=table.cut,log(price))) +
+        geom_boxplot()+ 
+        stat_summary(fun.y=mean, geom="line", aes(group=1),color = "Red")  + 
+        stat_summary(fun.y=mean, geom="point")+
+        coord_cartesian(ylim = c(0,10) )
+
+p2 = ggplot(data = diamonds, aes(x=table.cut2,log(price))) +
+        geom_boxplot()+ 
+        stat_summary(fun.y=mean, geom="line", aes(group=1),color = "Red")  + 
+        stat_summary(fun.y=mean, geom="point")+
+        coord_cartesian(ylim = c(0,10) )
+
+grid.arrange(p1,p2,ncol =1 )
+
+
+
+```
+
+Fig 18. Price vs  Table.cut and table.cut2
+
+# Bivariate Analysis
+
+### Talk about some of the relationships you observed in this part of the investigation. How did the feature(s) of interest vary with other features in the dataset?
+
+- The main feature I found that predicted price the best was carat. All variables related to carat, carat, carat.cut correlated well with price.
+- ANother variable that I didnt expect to predict price as well as it did was table. Table is a shape factor, so I discretized it into a finer and coarse bins. After discretization, clear patterns in diamond's price and table emerged. A larger value indicates that the diamond has larger face. 
+- Cut and clarity seemed to have minimal effect on price. For cut, this may be due to disproportionate number of diamonds that have premium or ideal cuts. 
+- Price showed increase with color quality (high for D).
+- Price had biomodal variation with cut, however, this may be due to differences in the number of diamonds with different carat (or prefered carat) size.
+
+### Did you observe any interesting relationships between the other features (not the main feature(s) of interest)?
+Depth did not change with price. This may be because manufactures make diamonds in some fixed shape, and depth factor may represent shapes for all types of diamonds i.e. its not a determinant of price.
+
+### What was the strongest relationship you found?
+Strongest realtion was between carat and price. The second strongest relation appeared between price and table. Table may be indicator of the shape of the diamond. 
+
+
+
+# Multivariate Plots Section
+
+In this section, I further explore the relation between price and other variables. I will use analysis from this part to decide variables in the final model building.
+
+### Price vs Carat variables
+
+I created 2 additional variables from carat, carat.cut indicating prefered carat number, and DistPrefered indicating deviation from prefered diamond size. Overall, it appears that the greater deviation from prefered size is associated with higher costs. Interesting distribution of DistPrefered is in 0 to .29 range. This is due to the discretization scheme I used. I did not split this into two data sets, because the number of points were very low. 
+
+```{r echo=FALSE}
+# Plotting price vs carat variables
+ggplot(aes(x = DistPrefered,y = log(price))
+       ,data=diamonds) + 
+        geom_point() +
+        xlim(0,.3) +
+        geom_smooth() +
+        facet_wrap(~carat.cut)
+
+```
+
+Fig 19. Price vs  carat variables
+
+I also plot price vs carat and carat.cut. It is clear that the price varies with carat, and the price for each carat is affected by the prefered size of that diamond.
+
+```{r echo=FALSE, Multivariate_Plots}
+# Plotting price vs carat variables
+ggplot(aes(x = carat,y = log(price),color = carat.cut)
+       ,data=diamonds) + 
+        geom_point() +
+        geom_smooth(color = "black") 
+
+```
+
+Fig 20. Price vs  carat variables
+
+### Price for different cuts.
+
+Although overall price vs cut distribution seemed to be bimodal, the distribution of price vs cut in bins refering to carat sizes is unimodal. 
+
+```{r echo = FALSE, warning = FALSE}
+ggplot(diamonds, aes(price, fill = cut)) +
+        geom_histogram() +
+        scale_x_log10() +
+        facet_wrap(~carat.cut)
+        
+        
+```
+
+Fig 21. Price vs  cut
+
+Overall, price appear to scale with the cut of the diamond well, with ideal cuts being more expensive. These trends however may be less influencial because from the histogram, it appears that most of the diamonds are of Premium or better cut. Therefore, a better variable may be if the diamond is better than premium or worse. These trends show that the cut or cut.quality is a poor predictor of the diamond price. 
+
+```{r}
+diamonds$cut.quality = "bad"
+ind_good = diamonds$cut == "Premium" | diamonds$cut == "Ideal"
+diamonds$cut.quality[ind_good] = "good"
+
+```
+
+```{r echo = FALSE, warning = FALSE}
+# testing cut vs cut.quality
+p1 = ggplot(diamonds, aes(x = carat, y = log(price), color = cut)) +
+        geom_point()
+p2 = ggplot(diamonds, aes(x = carat, y = log(price), color = cut.quality)) +
+        geom_point()
+grid.arrange(p1,p2,ncol = 1)        
+        
+```
+
+Fig 22. Price vs  cut quality
+
+
+### Price for different clarity
+
+Price vs clarity histograms reveal that for clearer diamonds, prices are higher. And clarity seems to be strong predictor of price. 
+
+```{r echo = FALSE, warning = FALSE}
+# price vs clarity
+ggplot(diamonds, aes(price, fill = clarity)) +
+        geom_histogram() +
+        scale_x_log10() +
+        facet_wrap(~carat.cut)
+        
+        
+```
+
+Fig 23. Price vs  clarity
+
+
+```{r echo=FALSE, warning=FALSE}
+# price vs carat by clarity
+
+ggplot(diamonds, aes(x = carat, y = log(price), color = clarity)) +
+        geom_point()
+```
+
+Fig 24. Price vs  carat labeled by clarity
+
+### Price for different color
+
+Price vs color histograms reveal that for clearer diamonds, prices are higher. And color seems to be strong predictor of price. 
+
+```{r echo = FALSE, warning = FALSE}
+# price vs color
+
+ggplot(diamonds, aes(price, fill = color)) +
+        geom_histogram() +
+        scale_x_log10() +
+        facet_wrap(~carat.cut)
+        
+        
+```
+
+Fig 25. Price vs color
+
+```{r echo = FALSE}
+# price vs carat by color
+
+ggplot(diamonds, aes(x = carat, y = log(price), color = color)) +
+        geom_point()
+```
+
+Fig 26. Price vs  carat labeled by color
+
+### Price for different table
+
+Price vs table.cut histograms reveal no effect of table parameter.
+
+
+```{r echo = FALSE, warning = FALSE}
+# price vs table
+
+ggplot(diamonds, aes(price, fill = table.cut)) +
+        geom_histogram() +
+        scale_x_log10() +
+        facet_wrap(~carat.cut)
+        
+        
+```
+
+Fig 27. Price vs  table
+
+
+```{r echo = FALSE,warning = FALSE}
+# price vs carat by table
+
+ggplot(diamonds, aes(x = carat, y = log(price), color = table.cut)) +
+        geom_point()
+```
+
+Fig 28. Price vs  carat by table
+
+Table is a shape factor, therefore I check if table.cut2 varies with the cut of the diamond. This plot conforms that table.cut varies with the cut of the diamond, with ideal cut diamonds having table.cut value below 57%, and poorer cuts having table.cut values above 57%
+
+```{r echo = FALSE,warning = FALSE}
+# comparison for finer and coarse discretization
+ggplot(diamonds, aes(x = table.cut2, y = carat, color = cut)) +
+        geom_point(position = 'jitter')
+```
+
+Fig 29. Comparison of finer and coarse table discretization
+
+
+###  Price vs carat, color and clarity
+
+Price vs carat plotted for different color reveals that for the best color (D), the variation in Price with clarity for a given carat is higher. These trends are however absent in poorer color (J). Therefore color * clarity will be included as an interaction term in the model. 
+
+```{r echo = FALSE,warning = FALSE}
+# price vs carat by clarity and color
+ggplot(data = diamonds, aes(x=carat, y = log(price), color = clarity)) +
+        geom_point()+
+        coord_cartesian(ylim = c(5,10) ,xlim= c(0,3))+
+        facet_wrap(~color)
+
+```
+
+Fig 30. Price vs carat by clarity and color
+
+
+Price vs color plotted for different prefered carat sizes reveals that for lower carat sizes, the price is determiend by clarity, however for higher carats,  the effect of clarity is less. This is understandable because its tough to get larger diamond with no faults. Therefore color * carat.cut will be included as an interaction term in the model. 
+
+```{r echo = FALSE,warning = FALSE}
+# Price vs color by clarity and carat.cut
+ggplot(data = diamonds, aes(x=color, y = log(price), color = clarity)) +
+        geom_point(position = "jitter")+
+        coord_cartesian(ylim = c(5,10) ,xlim= c(0,3))+
+        facet_wrap(~carat.cut)
+
+```
+
+Fig 31. Price vs color by clarity and carat.cut
+
+Price vs clarity plotted for different prefered carat sizes reveals that for higher carat sizes, the price is determiend by color, however for lower carats,  the effect of color is less. These effects however do not seem very strong, therefore, carat.cut * clarity will not be included in the model. 
+```{r echo = FALSE,warning = FALSE}
+# Price vs clarity by color and carat.cut
+
+ggplot(data = diamonds, aes(x=clarity, y = log(price), color = color)) +
+        geom_point(position = "jitter")+
+        coord_cartesian(ylim = c(5,10) ,xlim= c(0,3))+
+        facet_wrap(~carat.cut)
+
+```
+
+Fig 32. Price vs clarity by color and carat.cut
+
+
+# Modeling
+
+Based on results above, color, carat and clarity are the 3 variables that predict the trends in diamonds prices the best. I will use these variables to make the final model for price. However, there are 3 variables that quanify carat, and so first I perform a variable selection to determine the best set of carat variables to predict price. For this, I remove the extreme data points. I remove the diamonds whose prices are in top 2% of the prices. These may represent specialized markets, so I did not want to include these diamonds. This process removed 1079 of 53940 diamonds. I generated a training set of 85% of the data and a testing set as the remaing 15%.
+
+```{r warning = FALSE}
+# creating training and testing data
+up_limit = quantile(diamonds$price,probs=.98)
+ind_rm = diamonds$price>up_limit
+diamonds = diamonds[-ind_rm,]
+        
+set.seed(123)
+train_ind <- sample(seq_len(nrow(diamonds)), size = floor(0.85*nrow(diamonds)))
+diamonds_train <- diamonds[train_ind, ]
+diamonds_test <-  diamonds[-train_ind, ]
+
+```
+
+
+### Choosing the best carat variable. 
+
+The first task was to find the correct variable corresponding to carat value. For this, I fit log(price) to different combination of carat variables. These models were,  
+
+- m1: log(price) vs carat, 
+- m2: log(price) vs carat.cut, 
+- m3: log(price) vs carat.cut + DistPrefered
+
+Results indicate that carat.cut + DistPrefered model explained greater percentage of price variance than carat alone (0.935 vs 0.847). I chose carat.cut + DistPrefered to model carat information, because this varaible captures 2 important features of the model. First, it considers the diamond's prefered size and second it considered deviations above the prefered size.
+
+```{r echo = FALSE, warning = FALSE}
+# Getting correct set of carat variables.
+m1 <- lm(I(log(price)) ~ carat, data = diamonds)
+m2 <- lm(I(log(price)) ~ carat.cut, data = diamonds)
+m3 <- lm(I(log(price)) ~ carat.cut+ DistPrefered, data = diamonds)
+
+mtable(m1,m2,m3)
+
+pred1 = predict(m1,diamonds_test)
+pred2 = predict(m2,diamonds_test)
+pred3 = predict(m3,diamonds_test)
+df.pred = data.frame(pred1,pred2,pred3,price = diamonds_test$price)
+
+p1 = ggplot(aes(y = pred1, x =log(price)),data = df.pred )+
+        geom_point()+
+        geom_smooth()
+p2 = ggplot(aes(y = pred2, x =log(price)),data = df.pred )+
+        geom_point()+
+        geom_smooth()
+p3 = ggplot(aes(y = pred3, x =log(price)),data = df.pred )+
+        geom_point()+
+        geom_smooth()
+grid.arrange(p1,p2,p3,ncol = 1)
+```
+
+Fig 33. Results of fitted values for different carat variable combinations
+
+### Final model to predict diamond price.
+
+I finally combine clarity and color to carat.cut + DistPrefered to build a linear regression model to predict price of the diamond. After combining clarity and color, more than 98% of variance is explained by the model. This is also confirmed by plots of log(price) and predicted values. 
+
+```{r echo = FALSE, warning = FALSE}
+# Final model building
+
+m1 <- lm(I(log(price)) ~ carat.cut, data = diamonds_train)
+m2 <- update(m1, ~ . + DistPrefered)
+m3 <- update(m2, ~ . + clarity)
+m4 <- update(m3, ~ . + color)
+m5 <- update(m4, ~ . + color*clarity + color * carat.cut) # adding interaction terms
+
+
+pred1 = predict(m1,diamonds_test)
+pred2 = predict(m2,diamonds_test)
+pred3 = predict(m3,diamonds_test)
+pred4 = predict(m4,diamonds_test)
+pred5 = predict(m5,diamonds_test)
+
+df.pred = data.frame(pred1,pred2,pred3,pred4,pred5,price = diamonds_test$price)
+p1 = ggplot(aes(y = pred1, x =log(price)),data = df.pred )+
+        geom_point()+
+        geom_smooth()
+p2 = ggplot(aes(y = pred2, x =log(price)),data = df.pred )+
+        geom_point()+
+        geom_smooth()
+p3 = ggplot(aes(y = pred3, x =log(price)),data = df.pred )+
+        geom_point()+
+        geom_smooth()
+p4 = ggplot(aes(y = pred4, x =log(price)),data = df.pred )+
+        geom_point()+
+        geom_smooth()
+p5 = ggplot(aes(y = pred5, x =log(price)),data = df.pred )+
+        geom_point()+
+        geom_smooth()
+
+mtable(m1,m2,m3,m4,m5)
+grid.arrange(p1,p2,p3,p4,p5,ncol = 2)
+```
+
+Fig 34. Results of fitted values for adding variables incrementally.
+
+
+I also compared model performance to predict data between the training set and testing set. it appears that the model generalizes equally well to both the testing set. 
+
+```{r echo = FALSE, warning = FALSE}
+#  Performance of model on training and tesing set
+pred5_train = predict(m5,diamonds_train)
+df.pred_train = data.frame(pred5_train,price = diamonds_train$price)
+
+p5_train = ggplot(aes(y = pred5_train, x =log(price)),data = df.pred_train  )+
+        geom_point()+
+        geom_smooth()
+
+grid.arrange(p5,p5_train,ncol  = 1)
+
+```
+
+Fig 35. Performance of model on training and tesing set
+
+# Multivariate Analysis
+
+### Talk about some of the relationships you observed in this part of the investigation. Were there features that strengthened each other in terms of looking at your feature(s) of interest?
+
+It appears that a better predictor of diamond prices is not carat, but the prefered carat size for the diamond. Prefered carat size explained 93.3% of variance as against 84.7% for carat. Carat was represented by 2 variables, 1 indicating prefered carat size, carat.cut and other deviation from prefered size, DistPrefered.
+
+For a given carat, diamonds with lower clarity are almost always cheaper than diamonds with better clarity (worst clarity is I1 and best clarity is IF).
+
+For a given carat, diamonds with poorer color are almost always cheaper than diamonds with better color (worst color is J and best is D).
+
+Therefore, these 4 variables were used to build the final model. In addition, interactions between carat and clarity, and color and clarity were included in the model. 
+
+### Were there any interesting or surprising interactions between features?
+
+Table is a shape factor, therefore I check if table.cut2 varies with the cut of the diamond. This plot conforms that table.cut varies with the cut of the diamond, with ideal cut diamonds having table.cut value below 57%, and poorer cuts having table.cut values above 57%
+
+
+### OPTIONAL: Did you create any models with your dataset? Discuss the strengths and limitations of your model.
+
+I created a linear model with log(price) as output and carat.cut, DistPrefered, clarity and color as predictors. The results show that 98.4% variance in diamonds' prices can be explained using this model. 
+
+------
+
+# Final Plots and Summary
+
+### Plot One
+```{r echo=FALSE, Plot_One}
+#  Price and price density for different carat.cut
+p1 =  ggplot(aes(x=price), data = diamonds) + 
+        geom_histogram(binwidth = .015) +
+        scale_x_log10()+
+        ggtitle("log10(price)")
+p2 = ggplot(diamonds, aes(price, colour = carat.cut)) +
+        geom_density() +
+        scale_x_log10() +
+        ggtitle("log10(price) vs carat")
+grid.arrange(p1,p2,ncol=1)
+```
+
+Fig 36. Price and price density for different carat.cut
+
+### Description One
+The distribution of diamond prices appears to be bimodal. This may be due to buyers purchasing diamonds in different price ranges, and most people being comfortable buying diamonds that have some prefered price (like 1000 or 4000). The peak may also be related to large numbers of diamonds individuals purchase for certain occasions. For example, most prefered size of diamond for engagement rings is .37 carats, and assuming price of 3000 per carat it corresponds to the peak around 1100. 
+
+Density plots of price grouped by prefered carats (carat.cut) reveal the clear trend in price increase with carat size.
+
+
+
+### Plot Two
+```{r echo=FALSE, Plot_Two}
+# Price vs clarity and color
+p1 = ggplot(data = diamonds, aes(x=clarity,log(price),fill = clarity)) +
+        geom_boxplot()+ 
+        stat_summary(fun.y=mean, geom="line", aes(group=1),color = "Red")  + 
+        stat_summary(fun.y=mean, geom="point")+
+        coord_cartesian(ylim = c(6,10) )+
+        ggtitle("log10(price) vs clarity")
+
+p2 = ggplot(data = diamonds, aes(x=color,log(price),fill = color)) +
+        geom_boxplot()+ 
+        stat_summary(fun.y=mean, geom="line", aes(group=1),color = "Red")  + 
+        stat_summary(fun.y=mean, geom="point")+
+        coord_cartesian(ylim = c(6,10) )+
+        ggtitle("log10(price) vs color")
+
+grid.arrange(p1,p2,ncol =1 )
+ 
+```
+
+Fig 37. Price vs clarity and color
+
+### Description Two
+Log of price vs clarity and color clearly indicate that for better clarity (IF), the diamonds are more expensive, and for better color (D) prices are higher. These 2 variables were included in building the final model. 
+
+### Plot Three
+```{r echo=FALSE, Plot_Three}
+#Price vs carat by clarity and color
+ggplot(diamonds, aes(x = carat, y = log(price), color = clarity)) +
+        geom_point()+
+        xlim(.2,3) +
+        ylim(6,10) +
+        ggtitle("log10(price) vs carat for different clarity")
+ggplot(diamonds, aes(x = carat, y = log(price), color = color)) +
+        geom_point()+
+        xlim(.2,3) +
+        ylim(6,10) +
+        ggtitle("log10(price) vs carat for different color")
+```
+
+Fig 38. Price vs carat by clarity and color
+
+
+### Description Three
+
+- For a given carat weight, diamonds with higher clarity levels (I1 is worst and IF is best) are almost always cheaper than diamonds with poorer clarity. 
+- For a given carat weight, diamonds with better color levels (J is worst and D is best) are almost always cheaper than diamonds with poorer color. 
+
+------
+
+# Reflection
+
+The diamonds data set contains information on more than 54,000 thousand diamonds from around 2008. I started by exploring trends in individual variables. I found price variation to be bimodal, this may be reflection of the ammount of money people are comforatable spending on a ring. I noted very unique distribution of carat sizes. There were peaks in the distribution indicating preference for diamonds of certain sizes. Based on these values, I created a factor variable out of carat sizes. I descretized the carat sizes such that each bin had one unimodal distribution. Futher, the distribution of carat sizes seemed to have a right sided distribution around these prefered sizes, with the maximum being the bin containing the prefered size. This indicated a preference for diamond size, because as a customer who wants 2 carat diamond is more likely to buy a 2.1 carat diamond than 1.9 carat. Manufacturers may be aware of these preferences and cut diamonds in certain predetermined sizes. 
+
+In a second step, I plotted price vs individual variables. I noted that the price values varied with carat, color and clarity. Surprisingly, diamonds of better cut had lower prices. This may be due to large differences in number of diamonds with premuim or ideal cut vs others. I therefore created 2 varaibles from carat, a variable indicating prefered carat size (carat.cut), and another quanitfying deviation from the prefered size. I also created 3 additional variables, table.cut,table.cut2 and cut.quality. First 2 were discretized values of table, and showed no predictive relation to price. The next variable was quality of cut, and was good for premium and ideal, and bad for others. This variable also did not show any predictive relation to price, and hence was dropped in further analysis. Based on my exploratory analysis, I concluded that carat, clarity and color are the most important variables. I decided to use these variables for my model. However, as I had made 3 varaiables from carat, I performed additional analysis to choose the right set of variables representing carats. I fit a linear model to approximate log(price) by using 3 different varibles representing carat, 
+
+- m1: log(price) vs carat, Rsq = 0.847
+- m2: log(price) vs carat.cut, Rsq = 0.933 
+- m3: log(price) vs carat.cut + DistPrefered, Rsq = 0.935
+
+I was surprised to see that carat.cut alone explained more than 93% of variance in the data. This indicated that the diamonds are priced based on predefined sizes they were cut for. I also wanted to include the effect of weight or deviation from desired size in the model, I therefore chose to use  carat.cut and DistPrefered as carat variables. I split data into a training set (85%) and a test set and fit the model approximate price with 2 carat variables (carat.cut and DistPrefered), clarity and color. After fitting, the model explained more than 98% of the variance in the data. Although, the model predicted the prices well, one limitation is that the model does not account for time trends. Over years, the prices of diamonds have varied based on socioecomonic conditions that dictate supply/demand of prices. It will be nice to have a better dataset that had information about prices along with year information. It will be interesting to use this model to predict current diamond prices. 
