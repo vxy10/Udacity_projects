@@ -34,7 +34,7 @@
 
         d3.select('body')
           .append('h2')
-          .text('World Cup');
+          .text('Soccer World Cup');
         
 
 
@@ -152,7 +152,7 @@
               });
               //debugger;
               d3.select('h2')
-                     .text("World Cup " + year);
+                     .text("Soccer World Cup " + year);
               var circles = svg.selectAll('circle')
                                .data(filtered, key_func);
                   circles.exit().remove();
